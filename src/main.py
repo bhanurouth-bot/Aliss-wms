@@ -16,6 +16,8 @@ from src.api import manufacturing as manufacturing_api
 from src.api import auth as auth_api
 from src.api import integrations as integrations_api 
 from src.api import billing as billing_api
+from src.api import purchasing as purchasing_api
+
 # Create tables
 Base.metadata.create_all(bind=engine)
 
@@ -37,6 +39,8 @@ app.include_router(manufacturing_api.router)
 app.include_router(auth_api.router)
 app.include_router(billing_api.router)
 app.include_router(integrations_api.router)
+app.include_router(purchasing_api.router)
+
 
 @app.get("/health")
 def health_check():
