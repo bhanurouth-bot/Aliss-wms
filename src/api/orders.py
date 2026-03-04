@@ -5,6 +5,9 @@ from src.core.database import get_db
 from src.schemas import order as schemas
 from src.services.order_svc import create_order_with_fefo_reservation
 from src.models.order import Order
+from src.services.order_svc import allocate_backordered_order
+from fastapi import HTTPException
+
 
 router = APIRouter(prefix="/orders", tags=["Sales Orders"])
 
@@ -17,3 +20,11 @@ def create_sales_order(order_in: schemas.OrderCreate, db: Session = Depends(get_
 def list_orders(db: Session = Depends(get_db)):
     """List all orders."""
     return db.query(Order).all()
+
+@router.post("/{order_id}/reallocate", response_model=schemas.OrderResponse)
+def reallocate_backorder(order_id: int, db: Session = Depends(get_db)):
+    """
+    Attempt to fulfill a backordered sales order using newly manufactured 
+    or newly received inventory.
+    """
+    return allocate_backordered_order(db, order_id)

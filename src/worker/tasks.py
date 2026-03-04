@@ -68,3 +68,33 @@ def send_inventory_webhook(self, product_id: int, new_available_qty: float):
         logger.error(f"Failed to sync with website: {str(e)}")
         # If the website is down, retry the task in 30 seconds!
         raise self.retry(exc=e)
+    
+
+@celery_app.task(bind=True, max_retries=5, default_retry_delay=30)
+def send_shipping_webhook(self, external_reference: str, carrier: str, tracking_number: str):
+    """
+    Tells the external storefront (Amazon/Shopify) that the order has shipped.
+    """
+    payload = {
+        "order_id": external_reference,
+        "status": "SHIPPED",
+        "carrier": carrier,
+        "tracking_number": tracking_number
+    }
+    
+    headers = {
+        "Authorization": f"Bearer {WEBHOOK_SECRET}",
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        # Pushing the tracking info back to the website
+        response = requests.post(f"{WEBSITE_WEBHOOK_URL}/shipments", json=payload, headers=headers, timeout=5)
+        response.raise_for_status()
+        
+        logger.info(f"Successfully notified external platform for Order {external_reference}. Tracking: {tracking_number}")
+        return {"status": "success", "tracking": tracking_number}
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to send shipping webhook: {str(e)}")
+        raise self.retry(exc=e)

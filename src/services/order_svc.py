@@ -74,3 +74,68 @@ def create_order_with_fefo_reservation(db: Session, order_in: OrderCreate, allow
     db.commit()
     db.refresh(db_order)
     return db_order
+
+def allocate_backordered_order(db: Session, order_id: int):
+    """Attempts to fulfill missing items for a backordered sales order."""
+    
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order or order.status != OrderStatus.BACKORDERED:
+        raise HTTPException(status_code=400, detail="Order is not in BACKORDERED status.")
+        
+    allocations = [] 
+    still_backordered = False
+    
+    for item in order.items:
+        if item.qty_backordered <= 0:
+            continue # This item is already fully allocated, skip it!
+            
+        # Search for available inventory using FEFO logic
+        inventory_records = (
+            db.query(Inventory)
+            .outerjoin(ProductBatch, Inventory.batch_id == ProductBatch.id)
+            .filter(Inventory.product_id == item.product_id, Inventory.qty_available > 0)
+            .order_by(ProductBatch.expiry_date.asc())
+            .with_for_update() 
+            .all()
+        )
+        
+        remaining_to_fulfill = item.qty_backordered
+        
+        for inv in inventory_records:
+            if remaining_to_fulfill <= 0:
+                break
+                
+            qty_to_take = min(inv.qty_available, remaining_to_fulfill)
+            
+            # Move from available to reserved
+            inv.qty_available -= qty_to_take
+            inv.qty_reserved += qty_to_take
+            remaining_to_fulfill -= qty_to_take
+            
+            # Save mapping for the warehouse worker
+            allocations.append({
+                "product_id": item.product_id,
+                "bin_id": inv.bin_id,
+                "batch_id": inv.batch_id,
+                "qty": qty_to_take
+            })
+            
+        # Update the Order Item tracking
+        fulfilled_this_time = item.qty_backordered - remaining_to_fulfill
+        item.qty_allocated += fulfilled_this_time
+        item.qty_backordered = remaining_to_fulfill
+        
+        if item.qty_backordered > 0:
+            still_backordered = True
+            
+    # Generate the physical picklist for whatever we just found
+    if allocations:
+        generate_picklist(db, order.id, allocations)
+        
+    # If we found everything, update the order status so the warehouse knows it's ready!
+    if not still_backordered:
+        order.status = OrderStatus.PENDING 
+        
+    db.commit()
+    db.refresh(order)
+    return order

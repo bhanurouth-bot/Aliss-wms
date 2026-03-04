@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 from src.core.database import engine, Base
 
-from src.models import wms, product, inventory, order, wms_ops, purchase, aps, audit, manufacturing, auth, billing
+from src.models import wms, product, inventory,shipping, order, wms_ops, purchase, aps, audit, manufacturing, auth, billing
 
 # Import routers
 from src.api import wms as wms_api
@@ -17,6 +17,8 @@ from src.api import auth as auth_api
 from src.api import integrations as integrations_api 
 from src.api import billing as billing_api
 from src.api import purchasing as purchasing_api
+from src.api import shipping as shipping_api
+
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -40,7 +42,7 @@ app.include_router(auth_api.router)
 app.include_router(billing_api.router)
 app.include_router(integrations_api.router)
 app.include_router(purchasing_api.router)
-
+app.include_router(shipping_api.router)
 
 @app.get("/health")
 def health_check():
