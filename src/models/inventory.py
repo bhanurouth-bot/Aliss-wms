@@ -2,6 +2,7 @@
 from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime
 from sqlalchemy.orm import relationship
 from src.core.database import Base
+from sqlalchemy.sql import func
 
 class ProductBatch(Base):
     __tablename__ = 'product_batches'
