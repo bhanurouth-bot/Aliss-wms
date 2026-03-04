@@ -1,17 +1,15 @@
 # src/schemas/audit.py
 from pydantic import BaseModel
-from typing import Optional, Any, Dict
 from datetime import datetime
+from typing import Optional
 
 class AuditLogResponse(BaseModel):
     id: int
-    entity_type: str
-    entity_id: int
+    username: str
     action: str
-    before_data: Optional[Dict[str, Any]]
-    after_data: Optional[Dict[str, Any]]
-    performed_by: Optional[int]
+    entity_name: str
+    entity_id: int
+    details: str
     timestamp: datetime
-    ip_address: Optional[str]
-
+    
     model_config = {"from_attributes": True}

@@ -35,15 +35,6 @@ def create_product(product_in: schemas.ProductCreate, db: Session = Depends(get_
     # If you still have the Audit Log active, don't forget to flush and log here!
     db.commit()
     db.refresh(db_product)
-
-    log_activity(
-        db=db,
-        username=current_user.username,
-        action="CREATE",
-        entity="PRODUCT",
-        entity_id=db_product.id,
-        details=f"Created SKU: {db_product.sku} with MRP: {db_product.mrp}"
-    )
     
     return db_product
 

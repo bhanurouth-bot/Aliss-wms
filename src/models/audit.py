@@ -7,15 +7,17 @@ class AuditLog(Base):
     __tablename__ = 'audit_logs'
     
     id = Column(Integer, primary_key=True, index=True)
-    entity_type = Column(String, index=True) # e.g., 'Product', 'Inventory', 'Order'
-    entity_id = Column(Integer, index=True)
-    action = Column(String)                  # 'CREATE', 'UPDATE', 'DELETE'
     
-    # Storing the exact state of the data
+    # Core Audit Fields matching our Middleware
+    username = Column(String, index=True)      # Who did it (e.g., 'admin')
+    action = Column(String)                    # HTTP Method or Action ('POST', 'CREATE')
+    entity_name = Column(String, index=True)   # The URL path or Entity Name
+    entity_id = Column(Integer, index=True)    # The ID of the item affected
+    details = Column(String)                   # Human-readable description
+    
+    # Advanced data tracking (Optional for future use)
     before_data = Column(JSON, nullable=True) 
     after_data = Column(JSON, nullable=True)
     
-    # Metadata
-    performed_by = Column(Integer, index=True, nullable=True) # User ID
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
     ip_address = Column(String, nullable=True)

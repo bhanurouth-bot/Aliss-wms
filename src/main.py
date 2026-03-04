@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from src.core.database import engine, Base
 
 from src.models import wms, product,rma, inventory,shipping, order, wms_ops, purchase, aps, audit, manufacturing, auth, billing
+from src.core.middleware import GlobalAuditMiddleware # <-- 1. Import it
 
 # Import routers
 from src.api import wms as wms_api
@@ -30,7 +31,11 @@ app = FastAPI(
     version="1.0.0"
 )
 
+app.add_middleware(GlobalAuditMiddleware)
+
 # Include routers
+app.include_router(auth_api.router)
+app.include_router(products_api.router)
 app.include_router(wms_api.router)
 app.include_router(products_api.router)
 app.include_router(inventory_api.router)
