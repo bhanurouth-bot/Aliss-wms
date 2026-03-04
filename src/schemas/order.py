@@ -5,10 +5,12 @@ from enum import Enum
 
 class OrderStatusSchema(str, Enum):
     PENDING = "PENDING"
-    PROCESSING = "PROCESSING"
+    PROCESSING = "PROCESSING" # WMS is routing the picker
+    PICKED = "PICKED"         # Sitting at the Packing Station
+    PACKED = "PACKED"         # Verified, boxed, waiting for dispatch
     SHIPPED = "SHIPPED"
     CANCELLED = "CANCELLED"
-    BACKORDERED = "BACKORDERED" # <--- NEW
+    BACKORDERED = "BACKORDERED"
 
 class OrderItemCreate(BaseModel):
     product_id: int

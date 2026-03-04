@@ -22,7 +22,7 @@ def dispatch_order(order_id: int, shipment_in: schemas.ShipmentCreate, db: Sessi
     if not order:
         raise HTTPException(status_code=404, detail="Order not found.")
         
-    if order.status != OrderStatus.PROCESSING:
+    if order.status != OrderStatus.PACKED:
         raise HTTPException(status_code=400, detail="Order is not ready for dispatch. Is it picked yet?")
         
     # 1. Create the Shipment record

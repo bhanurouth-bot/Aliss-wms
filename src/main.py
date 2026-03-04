@@ -19,6 +19,7 @@ from src.api import billing as billing_api
 from src.api import purchasing as purchasing_api
 from src.api import shipping as shipping_api
 from src.api import rma as rma_api
+from src.api import packing as packing_api
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -44,6 +45,7 @@ app.include_router(integrations_api.router)
 app.include_router(purchasing_api.router)
 app.include_router(shipping_api.router)
 app.include_router(rma_api.router)
+app.include_router(packing_api.router)
 
 
 @app.get("/health")

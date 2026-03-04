@@ -6,10 +6,12 @@ from src.core.database import Base
 
 class OrderStatus(enum.Enum):
     PENDING = "PENDING"
-    PROCESSING = "PROCESSING"
+    PROCESSING = "PROCESSING" # WMS is routing the picker
+    PICKED = "PICKED"         # Sitting at the Packing Station
+    PACKED = "PACKED"         # Verified, boxed, waiting for dispatch
     SHIPPED = "SHIPPED"
     CANCELLED = "CANCELLED"
-    BACKORDERED = "BACKORDERED" # <--- NEW STATUS
+    BACKORDERED = "BACKORDERED"
 
 class Order(Base):
     __tablename__ = 'orders'
