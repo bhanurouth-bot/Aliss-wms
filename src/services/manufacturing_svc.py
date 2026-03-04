@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from datetime import datetime, timedelta
 from src.models.manufacturing import ProductionOrder, BillOfMaterial, ProductionStatus
 from src.models.inventory import Inventory, ProductBatch
-from src.services.audit_svc import log_audit
+from src.services.audit_svc import log_activity
 
 def complete_production_order(db: Session, order_id: int):
     """Consumes raw materials and generates the finished goods."""

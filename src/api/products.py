@@ -4,12 +4,14 @@ from sqlalchemy.orm import Session
 from src.core.database import get_db
 from src.models import product as models
 from src.schemas import product as schemas
-from src.services.audit_svc import log_audit # <-- 1. Import the service
+from src.core.security import get_current_user
+from src.models.auth import User
+from src.services.audit_svc import log_activity
 
 router = APIRouter(prefix="/products", tags=["Product Catalog"])
 
 @router.post("/", response_model=schemas.ProductResponse, status_code=201)
-def create_product(product_in: schemas.ProductCreate, db: Session = Depends(get_db)):
+def create_product(product_in: schemas.ProductCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     
     existing = db.query(models.Product).filter(
         (models.Product.sku == product_in.sku) | 
@@ -33,6 +35,15 @@ def create_product(product_in: schemas.ProductCreate, db: Session = Depends(get_
     # If you still have the Audit Log active, don't forget to flush and log here!
     db.commit()
     db.refresh(db_product)
+
+    log_activity(
+        db=db,
+        username=current_user.username,
+        action="CREATE",
+        entity="PRODUCT",
+        entity_id=db_product.id,
+        details=f"Created SKU: {db_product.sku} with MRP: {db_product.mrp}"
+    )
     
     return db_product
 
