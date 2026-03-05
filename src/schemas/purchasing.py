@@ -52,3 +52,10 @@ class CatalogItemResponse(CatalogItemCreate):
     id: int
     supplier_id: int
     model_config = {"from_attributes": True}
+
+class SupplierResponse(BaseModel):
+    id: int
+    name: str
+    contact_email: str
+    phone: str
+    model_config = {"from_attributes": True}

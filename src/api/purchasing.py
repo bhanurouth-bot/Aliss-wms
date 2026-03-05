@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from datetime import datetime
+from typing import List
 
 from src.core.database import get_db
 from src.core.security import require_role
@@ -172,3 +173,51 @@ def add_product_to_supplier_catalog(
     db.commit()
     db.refresh(catalog_entry)
     return catalog_entry
+
+# --- VIEW SUPPLIERS ---
+@router.get("/suppliers", response_model=List[schemas.SupplierResponse])
+def get_all_suppliers(
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["Admin", "Purchasing", "Warehouse Manager"]))
+):
+    """View a list of all registered suppliers."""
+    return db.query(Supplier).all()
+
+
+# --- VIEW SUPPLIER CATALOG ---
+@router.get("/suppliers/{supplier_id}/catalog", response_model=List[schemas.CatalogItemResponse])
+def get_supplier_catalog(
+    supplier_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["Admin", "Purchasing"]))
+):
+    """View all products, negotiated prices, and MOQs linked to a specific supplier."""
+    supplier = db.query(Supplier).filter(Supplier.id == supplier_id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier not found.")
+        
+    return db.query(SupplierProductCatalog).filter(SupplierProductCatalog.supplier_id == supplier.id).all()
+
+
+# --- VIEW ALL PURCHASE ORDERS ---
+@router.get("/orders", response_model=List[schemas.POResponse])
+def get_all_purchase_orders(
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["Admin", "Purchasing", "Warehouse Manager", "Warehouse Staff"]))
+):
+    """View all drafted, issued, and completed Purchase Orders."""
+    return db.query(PurchaseOrder).order_by(PurchaseOrder.created_at.desc()).all()
+
+
+# --- VIEW A SPECIFIC PURCHASE ORDER ---
+@router.get("/orders/{po_id}", response_model=schemas.POResponse)
+def get_purchase_order_by_id(
+    po_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["Admin", "Purchasing", "Warehouse Manager", "Warehouse Staff"]))
+):
+    """View the exact details and items of a specific PO."""
+    po = db.query(PurchaseOrder).filter(PurchaseOrder.id == po_id).first()
+    if not po:
+        raise HTTPException(status_code=404, detail="Purchase Order not found.")
+    return po
