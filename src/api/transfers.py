@@ -48,16 +48,29 @@ def dispatch_transfer(
     db: Session = Depends(get_db),
     current_user = Depends(require_role(["Admin", "Warehouse Staff"]))
 ):
-    """
-    Source Warehouse: Loads the truck. Deducts inventory from the source bins 
-    and sets status to IN_TRANSIT.
-    """
+    """Source Warehouse: Deducts inventory and enforces dispatch limits."""
     transfer = db.query(TransferOrder).filter(TransferOrder.id == transfer_id).first()
     if not transfer or transfer.status != TransferStatus.PENDING:
         raise HTTPException(status_code=400, detail="Transfer not found or not in PENDING status.")
 
     for action in payload.items:
-        # Deduct from Source Warehouse Bin
+        # 1. Fetch the ledger item FIRST
+        t_item = db.query(TransferOrderItem).filter(
+            TransferOrderItem.transfer_order_id == transfer.id,
+            TransferOrderItem.product_id == action.product_id
+        ).first()
+        
+        if not t_item:
+            raise HTTPException(status_code=400, detail=f"Product {action.product_id} is not part of this transfer.")
+            
+        # 2. VALIDATION: Prevent over-shipping!
+        if t_item.qty_shipped + action.qty > t_item.qty_requested:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Cannot dispatch {action.qty}. You are over-shipping! Only {t_item.qty_requested - t_item.qty_shipped} requested."
+            )
+
+        # 3. Deduct from Source Inventory safely
         inv_record = db.query(Inventory).filter(
             Inventory.product_id == action.product_id,
             Inventory.bin_id == action.bin_id,
@@ -68,20 +81,14 @@ def dispatch_transfer(
             raise HTTPException(status_code=400, detail=f"Insufficient stock in Source Bin {action.bin_id}")
             
         inv_record.qty_available -= action.qty
-        
-        # Update the Transfer Item
-        t_item = db.query(TransferOrderItem).filter(
-            TransferOrderItem.transfer_order_id == transfer.id,
-            TransferOrderItem.product_id == action.product_id
-        ).first()
-        if t_item:
-            t_item.qty_shipped += action.qty
+        t_item.qty_shipped += action.qty
 
     transfer.status = TransferStatus.IN_TRANSIT
     transfer.shipped_at = datetime.now()
     db.commit()
     db.refresh(transfer)
     return transfer
+
 
 @router.post("/{transfer_id}/receive", response_model=schemas.TransferResponse)
 def receive_transfer(
@@ -90,16 +97,29 @@ def receive_transfer(
     db: Session = Depends(get_db),
     current_user = Depends(require_role(["Admin", "Warehouse Staff"]))
 ):
-    """
-    Destination Warehouse: Unloads the truck. Adds inventory to the destination bins 
-    and sets status to COMPLETED.
-    """
+    """Destination Warehouse: Adds inventory and prevents phantom receiving."""
     transfer = db.query(TransferOrder).filter(TransferOrder.id == transfer_id).first()
     if not transfer or transfer.status != TransferStatus.IN_TRANSIT:
         raise HTTPException(status_code=400, detail="Transfer not found or not IN_TRANSIT.")
 
     for action in payload.items:
-        # Add to Destination Warehouse Bin
+        # 1. Fetch the ledger item FIRST
+        t_item = db.query(TransferOrderItem).filter(
+            TransferOrderItem.transfer_order_id == transfer.id,
+            TransferOrderItem.product_id == action.product_id
+        ).first()
+        
+        if not t_item:
+            raise HTTPException(status_code=400, detail=f"Product {action.product_id} was never shipped on this transfer.")
+            
+        # 2. VALIDATION: Prevent phantom receiving!
+        if t_item.qty_received + action.qty > t_item.qty_shipped:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Cannot receive {action.qty}. The source warehouse only shipped {t_item.qty_shipped - t_item.qty_received} remaining units. Check the truck again!"
+            )
+
+        # 3. Add to Destination Inventory safely
         inv_record = db.query(Inventory).filter(
             Inventory.product_id == action.product_id,
             Inventory.bin_id == action.bin_id,
@@ -117,13 +137,7 @@ def receive_transfer(
             )
             db.add(new_inv)
             
-        # Update the Transfer Item
-        t_item = db.query(TransferOrderItem).filter(
-            TransferOrderItem.transfer_order_id == transfer.id,
-            TransferOrderItem.product_id == action.product_id
-        ).first()
-        if t_item:
-            t_item.qty_received += action.qty
+        t_item.qty_received += action.qty
 
     transfer.status = TransferStatus.COMPLETED
     transfer.received_at = datetime.now()
