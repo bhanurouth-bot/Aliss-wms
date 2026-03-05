@@ -1,5 +1,6 @@
-# src/models/product.py (Update)
-from sqlalchemy import Column, Integer, String, Boolean, Float
+# src/models/product.py
+from sqlalchemy import Column, Integer, String, Boolean, Float, ForeignKey
+from sqlalchemy.orm import relationship
 from src.core.database import Base
 
 class Product(Base):
@@ -12,9 +13,30 @@ class Product(Base):
     barcode = Column(String, unique=True, index=True)
     unit_type = Column(String)
     
-    # --- NEW INCLUSIVE PRICING COLUMNS ---
-    mrp = Column(Float, default=0.0)         # The final price the customer pays
-    gst_percent = Column(Float, default=0.0) # e.g., 5.0, 12.0, 18.0
-    base_price = Column(Float, default=0.0)  # Auto-calculated pre-tax price
-    
+    mrp = Column(Float, default=0.0)         
+    gst_percent = Column(Float, default=0.0) 
+    base_price = Column(Float, default=0.0)  
     requires_batch_tracking = Column(Boolean, default=False)
+    
+    # --- NEW: KITTING FLAG ---
+    is_kit = Column(Boolean, default=False)
+    
+    # A product can have many components (if it is a kit)
+    components = relationship(
+        "KitComponent", 
+        foreign_keys="KitComponent.kit_id", 
+        back_populates="kit", 
+        cascade="all, delete-orphan"
+    )
+
+class KitComponent(Base):
+    """The Bill of Materials (BOM) linking a Kit to its physical items."""
+    __tablename__ = 'kit_components'
+    id = Column(Integer, primary_key=True, index=True)
+    
+    kit_id = Column(Integer, ForeignKey('products.id'))
+    component_id = Column(Integer, ForeignKey('products.id'))
+    qty = Column(Float) # How many of this component are required for 1 Kit?
+    
+    kit = relationship("Product", foreign_keys=[kit_id], back_populates="components")
+    component = relationship("Product", foreign_keys=[component_id])

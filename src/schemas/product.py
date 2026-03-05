@@ -1,5 +1,16 @@
-# src/schemas/product.py (Update)
+# src/schemas/product.py
 from pydantic import BaseModel
+from typing import List, Optional
+
+class KitComponentCreate(BaseModel):
+    component_id: int
+    qty: float
+
+class KitComponentResponse(BaseModel):
+    id: int
+    component_id: int
+    qty: float
+    model_config = {"from_attributes": True}
 
 class ProductBase(BaseModel):
     sku: str
@@ -8,14 +19,16 @@ class ProductBase(BaseModel):
     barcode: str
     unit_type: str
     requires_batch_tracking: bool = False
-    mrp: float          # User inputs the final MRP
-    gst_percent: float  # User inputs the tax bracket
+    mrp: float
+    gst_percent: float
+    is_kit: bool = False # <-- NEW
 
 class ProductCreate(ProductBase):
-    pass
+    components: Optional[List[KitComponentCreate]] = None # <-- BOM Input
 
 class ProductResponse(ProductBase):
     id: int
-    base_price: float   # We return the calculated base price to the user
+    base_price: float
+    components: Optional[List[KitComponentResponse]] = []
     
     model_config = {"from_attributes": True}
