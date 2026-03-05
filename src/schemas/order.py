@@ -18,6 +18,8 @@ class OrderItemCreate(BaseModel):
 
 class OrderCreate(BaseModel):
     customer_name: str
+    order_type: str = "B2C" # "B2B" or "B2C"
+    route: Optional[str] = None
     items: List[OrderItemCreate]
 
 class OrderItemResponse(BaseModel):

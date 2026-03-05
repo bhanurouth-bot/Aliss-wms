@@ -4,14 +4,21 @@ from fastapi import HTTPException
 
 # --- 1. WE MUST IMPORT QCStatus HERE! ---
 from src.models.inventory import Inventory, ProductBatch, QCStatus 
-from src.models.order import Order, OrderItem, OrderStatus
+from src.models.order import CustomerType, Order, OrderItem, OrderStatus
 from src.schemas.order import OrderCreate
 from src.services.wms_svc import generate_picklist
 
 def create_order_with_fefo_reservation(db: Session, order_in: OrderCreate, allow_backorder: bool = False):
     """Creates an order. If allow_backorder is True, it secures what it can and flags the rest."""
     
-    db_order = Order(customer_name=order_in.customer_name)
+    is_single_sku = len(order_in.items) == 1
+
+    db_order = Order(
+        customer_name=order_in.customer_name,
+        order_type=CustomerType(order_in.order_type),
+        route=order_in.route,
+        is_single_sku=is_single_sku # Auto-calculate!
+    )
     db.add(db_order)
     db.flush() 
     

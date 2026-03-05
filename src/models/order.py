@@ -1,23 +1,36 @@
 # src/models/order.py
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, Enum as SQLEnum
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, Boolean, DateTime, Enum as SQLEnum
 from sqlalchemy.orm import relationship
 import enum
 from src.core.database import Base
 
 class OrderStatus(enum.Enum):
     PENDING = "PENDING"
-    PROCESSING = "PROCESSING" # WMS is routing the picker
-    PICKED = "PICKED"         # Sitting at the Packing Station
-    PACKED = "PACKED"         # Verified, boxed, waiting for dispatch
+    WAVED = "WAVED"           # <--- NEW: Assigned to a bulk wave, waiting to be picked
+    PROCESSING = "PROCESSING" 
+    PICKED = "PICKED"         
+    PACKED = "PACKED"         
     SHIPPED = "SHIPPED"
     CANCELLED = "CANCELLED"
     BACKORDERED = "BACKORDERED"
+
+class CustomerType(enum.Enum):
+    B2C = "B2C" # Regular customer (Requires standard billing)
+    B2B = "B2B" # Wholesale/Retailer (Requires bulk billing/invoicing)
 
 class Order(Base):
     __tablename__ = 'orders'
     id = Column(Integer, primary_key=True, index=True)
     customer_name = Column(String, index=True)
     status = Column(SQLEnum(OrderStatus), default=OrderStatus.PENDING)
+    
+    # --- NEW: SMART FILTERS ---
+    order_type = Column(SQLEnum(CustomerType), default=CustomerType.B2C)
+    is_single_sku = Column(Boolean, default=True) # Used to group fast-pack orders
+    route = Column(String, nullable=True)         # e.g., "MORNING-DISPATCH", "FEDEX-EXPRESS"
+    cutoff_time = Column(DateTime, nullable=True) # Must be packed before this time
+    
+    wave_id = Column(Integer, ForeignKey('picking_waves.id'), nullable=True) # Link to the bulk wave
     
     source = Column(String, default="MANUAL_ENTRY") 
     external_reference = Column(String, unique=True, nullable=True, index=True) 
@@ -31,7 +44,7 @@ class OrderItem(Base):
     product_id = Column(Integer, ForeignKey('products.id'))
     
     qty_ordered = Column(Float)
-    qty_allocated = Column(Float, default=0.0)   # <--- What we actually secured
-    qty_backordered = Column(Float, default=0.0) # <--- What we are missing
+    qty_allocated = Column(Float, default=0.0)   
+    qty_backordered = Column(Float, default=0.0) 
     
     order = relationship("Order", back_populates="items")

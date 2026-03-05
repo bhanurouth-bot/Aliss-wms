@@ -25,6 +25,8 @@ from src.api import packing as packing_api
 from src.api import cycle_counts as cycle_counts_api
 from src.api import transfers as transfers_api
 from src.api import qc as qc_api
+from src.api import waves as waves_api
+
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -58,6 +60,7 @@ app.include_router(packing_api.router)
 app.include_router(cycle_counts_api.router)
 app.include_router(transfers_api.router)
 app.include_router(qc_api.router)
+app.include_router(waves_api.router)
 
 
 @app.get("/health")
