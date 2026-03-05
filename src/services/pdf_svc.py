@@ -10,6 +10,9 @@ from reportlab.lib import colors
 from src.models.billing import Invoice
 from src.models.order import Order
 from src.models.product import Product
+from src.models.wms_ops import PickingWave
+from src.models.wms import Bin
+
 
 def generate_picklist_pdf(picklist_data: dict) -> io.BytesIO:
     buffer = io.BytesIO()
@@ -119,3 +122,70 @@ def generate_invoice_pdf(db: Session, invoice_id: int):
     buffer.seek(0)
     
     return buffer, invoice.invoice_number
+
+
+def generate_wave_pdf(db: Session, wave_id: int):
+    """Generates a professional Bulk Wave Picklist PDF."""
+    
+    wave = db.query(PickingWave).filter(PickingWave.id == wave_id).first()
+    if not wave:
+        raise HTTPException(status_code=404, detail="Wave not found")
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=letter)
+    elements = []
+    styles = getSampleStyleSheet()
+
+    # Header
+    elements.append(Paragraph("PET PRODUCTS ENTERPRISE", styles['Heading1']))
+    elements.append(Paragraph(f"BULK WAVE PICKLIST: {wave.wave_name}", styles['Heading2']))
+    elements.append(Paragraph(f"Status: {wave.status.name}", styles['Normal']))
+    elements.append(Paragraph(f"Total Orders Grouped: {len(wave.orders)}", styles['Normal']))
+    elements.append(Spacer(1, 20))
+
+    # Table Data
+    table_data = [["Bin Location", "SKU / Product", "Expected Qty", "Check (✓)"]]
+    
+    # We want to sort tasks by Bin Location to make the worker's walk efficient!
+    tasks_with_locations = []
+    for task in wave.tasks:
+        product = db.query(Product).filter(Product.id == task.product_id).first()
+        bin_record = db.query(Bin).filter(Bin.id == task.bin_id).first()
+        
+        tasks_with_locations.append({
+            "bin": bin_record.location_code if bin_record else "Unknown",
+            "sku": product.sku if product else "Unknown",
+            "name": product.name if product else "Unknown",
+            "qty": task.qty_expected
+        })
+        
+    # Sort alphabetically by Bin Location
+    tasks_with_locations.sort(key=lambda x: x["bin"])
+
+    for item in tasks_with_locations:
+        table_data.append([
+            item["bin"],
+            f"{item['sku']}\n{item['name']}",
+            str(item["qty"]),
+            "" # Empty box for the worker to check off with a pen
+        ])
+
+    # Table Styling
+    table_style = TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.darkorange),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+    ])
+    
+    t = Table(table_data, colWidths=[100, 200, 100, 80])
+    t.setStyle(table_style)
+    elements.append(t)
+
+    doc.build(elements)
+    buffer.seek(0)
+    
+    return buffer, wave.wave_name

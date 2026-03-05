@@ -8,6 +8,10 @@ from src.core.database import get_db
 from src.core.security import require_role
 from src.models.order import Order, OrderStatus, CustomerType
 from src.models.wms_ops import PickingWave, PickTask
+from fastapi.responses import StreamingResponse
+from src.schemas import wms_ops as wms_schemas
+from src.services.pdf_svc import generate_wave_pdf
+from src.models.product import Product
 
 router = APIRouter(prefix="/wms/waves", tags=["Smart Wave Picking"])
 
@@ -88,3 +92,79 @@ def generate_smart_wave(
         "orders_included": len(matching_orders),
         "total_optimized_pick_tasks": len(aggregated_picks)
     }
+
+@router.get("/{wave_id}", response_model=wms_schemas.PickingWaveResponse)
+def get_wave_details(
+    wave_id: int, 
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["Admin", "Warehouse Manager", "Warehouse Staff"]))
+):
+    """View the details of a specific Wave and its consolidated pick tasks."""
+    wave = db.query(PickingWave).filter(PickingWave.id == wave_id).first()
+    if not wave:
+        raise HTTPException(status_code=404, detail="Wave not found.")
+    return wave
+
+
+@router.get("/{wave_id}/pdf")
+def download_wave_pdf(
+    wave_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["Admin", "Warehouse Manager", "Warehouse Staff"]))
+):
+    """Generates a printable PDF for the warehouse worker to take on their walk."""
+    pdf_buffer, wave_name = generate_wave_pdf(db, wave_id)
+    
+    headers = {
+        "Content-Disposition": f"attachment; filename=WAVE-{wave_name}.pdf"
+    }
+    
+    return StreamingResponse(
+        pdf_buffer, 
+        media_type="application/pdf", 
+        headers=headers
+    )
+
+@router.get("/{wave_id}/orders")
+def get_wave_sorting_dashboard(
+    wave_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["Admin", "Warehouse Manager", "Warehouse Staff"]))
+):
+    """
+    The Segregation Screen: Gives the packer a clear checklist of every order 
+    associated with this wave, and the exact barcodes needed to pack each box.
+    """
+    wave = db.query(PickingWave).filter(PickingWave.id == wave_id).first()
+    if not wave:
+        raise HTTPException(status_code=404, detail="Wave not found.")
+
+    dashboard_data = {
+        "wave_id": wave.id,
+        "wave_name": wave.wave_name,
+        "total_orders": len(wave.orders),
+        "orders": []
+    }
+
+    # Build a clean checklist for the frontend UI
+    for order in wave.orders:
+        order_data = {
+            "order_id": order.id,
+            "customer_name": order.customer_name,
+            "status": order.status.name,
+            "items_to_pack": []
+        }
+        
+        for item in order.items:
+            if item.qty_allocated > 0: # Only show items they actually have to pack!
+                product = db.query(Product).filter(Product.id == item.product_id).first()
+                order_data["items_to_pack"].append({
+                    "sku": product.sku,
+                    "name": product.name,
+                    "expected_barcode": product.barcode, # Show them what to scan!
+                    "qty_needed": item.qty_allocated
+                })
+                
+        dashboard_data["orders"].append(order_data)
+
+    return dashboard_data
