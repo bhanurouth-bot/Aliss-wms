@@ -1,43 +1,134 @@
 # src/api/purchasing.py
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func
-from typing import List
+from datetime import datetime
 
 from src.core.database import get_db
 from src.core.security import require_role
+from src.models.purchase import Supplier, PurchaseOrder, PurchaseOrderItem, POStatus, GRN, GRNItem
+from src.models.inventory import Inventory
 from src.schemas import purchasing as schemas
+from src.models.wms import Bin
+from src.services.order_svc import auto_cross_dock
 
-from src.models.product import Product
-from src.models.order import Order, OrderItem, OrderStatus
+router = APIRouter(prefix="/purchasing", tags=["Inbound POs & Receiving (GRN)"])
 
-router = APIRouter(prefix="/purchasing", tags=["Purchasing & Procurement"])
+@router.post("/suppliers", status_code=201)
+def create_supplier(name: str, email: str, phone: str, db: Session = Depends(get_db)):
+    supplier = Supplier(name=name, contact_email=email, phone=phone)
+    db.add(supplier)
+    db.commit()
+    db.refresh(supplier)
+    return supplier
 
-@router.get("/reports/backorders", response_model=List[schemas.BackorderReportItem])
-def get_aggregated_backorders(
-    db: Session = Depends(get_db),
-    current_user = Depends(require_role(["Admin", "Purchasing"])) # Locked down!
+@router.post("/orders", response_model=schemas.POResponse, status_code=201)
+def create_purchase_order(
+    payload: schemas.POCreate, 
+    db: Session = Depends(get_db), 
+    current_user = Depends(require_role(["Admin", "Purchasing"]))
 ):
-    """
-    Generates a live 'Shopping List' for the Procurement team.
-    Sums up all missing stock across every active backordered sales order.
-    """
+    """Drafts and Issues a new PO to a Supplier."""
+    po_number = f"PO-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    db_po = PurchaseOrder(po_number=po_number, supplier_id=payload.supplier_id, status=POStatus.ISSUED)
+    db.add(db_po)
+    db.flush()
     
-    # We use SQLAlchemy's .label() to map the SQL columns directly to our Pydantic schema
-    results = (
-        db.query(
-            Product.id.label("product_id"),
-            Product.sku.label("sku"),
-            Product.name.label("product_name"),
-            func.sum(OrderItem.qty_backordered).label("total_backordered")
+    for item in payload.items:
+        db_item = PurchaseOrderItem(
+            po_id=db_po.id, product_id=item.product_id, 
+            qty_ordered=item.qty_ordered, unit_cost=item.unit_cost
         )
-        .join(OrderItem, Product.id == OrderItem.product_id)
-        .join(Order, Order.id == OrderItem.order_id)
-        # Only count stock from orders that are actually backordered (ignore shipped/cancelled ones)
-        .filter(Order.status == OrderStatus.BACKORDERED)
-        .filter(OrderItem.qty_backordered > 0)
-        .group_by(Product.id, Product.sku, Product.name)
-        .all()
-    )
+        db.add(db_item)
+        
+    db.commit()
+    db.refresh(db_po)
+    return db_po
+
+@router.post("/orders/{po_id}/receive")
+def receive_po_and_generate_grn(
+    po_id: int, 
+    payload: schemas.GRNCreateRequest, 
+    db: Session = Depends(get_db), 
+    current_user = Depends(require_role(["Admin", "Warehouse Staff"]))
+):
+    po = db.query(PurchaseOrder).filter(PurchaseOrder.id == po_id).first()
+    if not po:
+        raise HTTPException(status_code=404, detail="Purchase Order not found.")
     
-    return results
+    if po.status == POStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="This PO is already completely received.")
+
+    scanned_totals = {}
+    for item in payload.scanned_items:
+        scanned_totals[item.product_id] = scanned_totals.get(item.product_id, 0) + item.qty_received
+
+        # --- 2. NEW: STRICT BIN VALIDATION! ---
+        bin_record = db.query(Bin).filter(Bin.id == item.bin_id).first()
+        if not bin_record:
+            raise HTTPException(status_code=400, detail=f"Invalid location! Bin ID {item.bin_id} does not exist in the warehouse.")
+
+    for prod_id, scan_qty in scanned_totals.items():
+        po_item = db.query(PurchaseOrderItem).filter(
+            PurchaseOrderItem.po_id == po.id, PurchaseOrderItem.product_id == prod_id
+        ).first()
+        
+        if not po_item:
+            raise HTTPException(status_code=400, detail=f"Product ID {prod_id} is NOT on this PO! Reject the item from the truck.")
+        
+        remaining_expected = po_item.qty_ordered - po_item.qty_received
+        if scan_qty > remaining_expected:
+            raise HTTPException(status_code=400, detail=f"Over-shipment detected for Product ID {prod_id}! Expected {remaining_expected}, Scanned {scan_qty}. Send the extra items back!")
+
+    grn_number = f"GRN-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    db_grn = GRN(grn_number=grn_number, po_id=po.id, notes=payload.notes)
+    db.add(db_grn)
+    db.flush()
+
+    cross_dock_alerts = [] # To hold our alerts!
+
+    for item in payload.scanned_items:
+        po_item = db.query(PurchaseOrderItem).filter(
+            PurchaseOrderItem.po_id == po.id, PurchaseOrderItem.product_id == item.product_id
+        ).first()
+        po_item.qty_received += item.qty_received
+
+        db_grn_item = GRNItem(
+            grn_id=db_grn.id, product_id=item.product_id, 
+            qty_received=item.qty_received, bin_id=item.bin_id
+        )
+        db.add(db_grn_item)
+
+        inventory = db.query(Inventory).filter(
+            Inventory.product_id == item.product_id,
+            Inventory.bin_id == item.bin_id,
+            Inventory.batch_id == item.batch_id
+        ).first()
+
+        if inventory:
+            inventory.qty_available += item.qty_received
+        else:
+            new_inv = Inventory(
+                product_id=item.product_id, bin_id=item.bin_id, 
+                batch_id=item.batch_id, qty_available=item.qty_received
+            )
+            db.add(new_inv)
+
+        # --- 3. NEW: TRIGGER THE CROSS-DOCK ENGINE! ---
+        cross_docked_orders = auto_cross_dock(db, product_id=item.product_id)
+        if cross_docked_orders:
+            cross_dock_alerts.append(f"🚨 CROSS-DOCK ALERT! {item.qty_received} units of Product {item.product_id} immediately routed to fulfill Orders: {cross_docked_orders}. Skip put-away and take items directly to Packing Desk!")
+
+    po_items = db.query(PurchaseOrderItem).filter(PurchaseOrderItem.po_id == po.id).all()
+    po_fully_received = all(i.qty_received >= i.qty_ordered for i in po_items)
+
+    po.status = POStatus.COMPLETED if po_fully_received else POStatus.PARTIAL_RECEIVED
+
+    db.commit()
+    db.refresh(db_grn)
+    
+    return {
+        "message": "Receiving verified. GRN legally created and Physical Inventory updated.",
+        "grn_number": db_grn.grn_number,
+        "new_po_status": po.status.name,
+        "cross_dock_alerts": cross_dock_alerts # Show the worker the flashing alerts!
+    }
