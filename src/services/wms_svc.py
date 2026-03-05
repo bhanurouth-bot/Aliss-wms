@@ -80,10 +80,10 @@ def confirm_pick_task(db: Session, task_id: int, scanned_bin: str, scanned_produ
     if all(t.status == TaskStatus.COMPLETED for t in all_tasks):
         picklist.status = TaskStatus.COMPLETED
         
-        # Advance the Order status to PROCESSING (meaning it's ready to be boxed and shipped)
+        # Advance the Order status to PICKED (meaning it's sitting at the packing desk)
         order = db.query(Order).filter(Order.id == picklist.order_id).first()
         if order:
-            order.status = OrderStatus.PROCESSING
+            order.status = OrderStatus.PICKED # <--- FIXED!
 
     db.commit()
     db.refresh(task)
