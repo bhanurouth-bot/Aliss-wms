@@ -4,6 +4,7 @@ from src.core.database import engine, Base
 
 from src.models import wms, product,rma, inventory,shipping, order, wms_ops, purchase, aps, audit, manufacturing, auth, billing
 from src.core.middleware import GlobalAuditMiddleware # <-- 1. Import it
+from src.models import transfer
 
 # Import routers
 from src.api import wms as wms_api
@@ -22,6 +23,9 @@ from src.api import shipping as shipping_api
 from src.api import rma as rma_api
 from src.api import packing as packing_api
 from src.api import cycle_counts as cycle_counts_api
+from src.api import transfers as transfers_api
+
+
 # Create tables
 Base.metadata.create_all(bind=engine)
 
@@ -52,6 +56,8 @@ app.include_router(shipping_api.router)
 app.include_router(rma_api.router)
 app.include_router(packing_api.router)
 app.include_router(cycle_counts_api.router)
+app.include_router(transfers_api.router)
+
 
 
 @app.get("/health")
