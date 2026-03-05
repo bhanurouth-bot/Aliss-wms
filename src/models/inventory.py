@@ -1,8 +1,14 @@
 # src/models/inventory.py
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from src.core.database import Base
 from sqlalchemy.sql import func
+import enum
+
+class QCStatus(enum.Enum):
+    AVAILABLE = "AVAILABLE"       # Safe to sell
+    QUARANTINED = "QUARANTINED"   # Under inspection, do not touch
+    RECALLED = "RECALLED"
 
 class ProductBatch(Base):
     __tablename__ = 'product_batches'
@@ -19,7 +25,9 @@ class Inventory(Base):
     bin_id = Column(Integer, ForeignKey('bins.id'), index=True)
     
     qty_available = Column(Float, default=0.0)
-    qty_reserved = Column(Float, default=0.0) # Used when an order comes in but isn't shipped yet
+    qty_reserved = Column(Float, default=0.0)
+
+    qc_status = Column(SQLEnum(QCStatus), default=QCStatus.AVAILABLE)
     
 class InventoryAdjustment(Base):
     """Financial and operational audit trail for cycle counts and shrinkage."""
