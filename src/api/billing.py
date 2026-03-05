@@ -9,6 +9,8 @@ from src.models.order import Order, CustomerType
 from src.models.product import Product
 from src.models.billing import Invoice, InvoiceItem, InvoiceStatus
 from src.schemas import billing as schemas
+from fastapi.responses import StreamingResponse
+from src.services.pdf_svc import generate_invoice_pdf
 
 router = APIRouter(prefix="/billing", tags=["Financials & Invoicing"])
 
@@ -94,3 +96,27 @@ def generate_invoice(
     db.commit()
     db.refresh(db_invoice)
     return db_invoice
+
+@router.get("/invoice/{invoice_id}/pdf")
+def download_invoice_pdf(
+    invoice_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["Admin", "Finance"]))
+):
+    """
+    Generates and downloads a beautifully formatted PDF copy of the invoice.
+    """
+    # 1. Generate the PDF in memory
+    pdf_buffer, invoice_number = generate_invoice_pdf(db, invoice_id)
+    
+    # 2. Tell the browser to download it as a file with the correct name
+    headers = {
+        "Content-Disposition": f"attachment; filename={invoice_number}.pdf"
+    }
+    
+    # 3. Stream the raw bytes back to the user!
+    return StreamingResponse(
+        pdf_buffer, 
+        media_type="application/pdf", 
+        headers=headers
+    )

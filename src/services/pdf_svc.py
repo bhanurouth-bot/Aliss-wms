@@ -84,7 +84,7 @@ def generate_invoice_pdf(db: Session, invoice_id: int):
         table_data.append([
             product_name,
             str(item.qty),
-            f"${item.unit_base_price:.2f}",
+            f"${item.unit_price:.2f}",      # <--- FIXED!
             f"${item.tax_amount:.2f}",
             f"${item.line_total:.2f}"
         ])

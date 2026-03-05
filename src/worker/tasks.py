@@ -4,7 +4,7 @@ from src.worker.celery_app import celery_app
 from src.core.database import SessionLocal
 from src.services.aps_svc import run_replenishment_engine
 from src.worker.celery_app import celery_app
-
+import requests
 
 # The URL of your e-commerce storefront's API
 WEBSITE_WEBHOOK_URL = "https://your-website.com/api/webhooks/erp-sync"
