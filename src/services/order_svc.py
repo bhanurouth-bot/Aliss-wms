@@ -166,3 +166,36 @@ def allocate_backordered_order(db: Session, order_id: int):
     db.commit()
     db.refresh(order)
     return order
+
+
+def auto_cross_dock(db: Session, product_id: int):
+    """
+    Sweeps the Backorder queue for any orders waiting on this product 
+    and fulfills them instantly with newly arrived stock.
+    """
+    # 1. Find all backordered orders that need this specific product
+    backordered_orders = (
+        db.query(Order)
+        .join(OrderItem)
+        .filter(
+            Order.status == OrderStatus.BACKORDERED,
+            OrderItem.product_id == product_id,
+            OrderItem.qty_backordered > 0
+        )
+        .order_by(Order.id.asc()) # Oldest orders get priority!
+        .all()
+    )
+
+    cross_docked_order_ids = []
+    
+    # 2. Route the new stock to the waiting orders
+    for order in backordered_orders:
+        # We reuse our existing backorder allocation engine!
+        allocate_backordered_order(db, order.id)
+        
+        db.refresh(order)
+        # If the order successfully grabbed the stock it needed, it will no longer be BACKORDERED
+        if order.status != OrderStatus.BACKORDERED:
+            cross_docked_order_ids.append(order.id)
+
+    return cross_docked_order_ids

@@ -27,4 +27,6 @@ class InventoryResponse(BaseModel):
     bin_id: int
     qty_available: float
     qty_reserved: float
+
+    cross_dock_message: Optional[str] = None
     model_config = {"from_attributes": True}

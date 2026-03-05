@@ -6,6 +6,8 @@ from src.models import inventory as inv_models
 from src.models import product as prod_models
 from src.models import wms as wms_models
 from src.schemas import inventory as schemas
+from src.services.order_svc import auto_cross_dock
+
 
 router = APIRouter(prefix="/inventory", tags=["Inventory & Stock"])
 
@@ -28,7 +30,7 @@ def create_batch(batch_in: schemas.ProductBatchCreate, db: Session = Depends(get
 
 @router.post("/receive/", response_model=schemas.InventoryResponse)
 def receive_goods(receipt_in: schemas.InventoryReceive, db: Session = Depends(get_db)):
-    """Add stock to a specific bin."""
+    """Add stock to a specific bin and check for Cross-Docking opportunities."""
     
     # 1. Validate Product and Bin
     product = db.query(prod_models.Product).filter(prod_models.Product.id == receipt_in.product_id).first()
@@ -39,11 +41,10 @@ def receive_goods(receipt_in: schemas.InventoryReceive, db: Session = Depends(ge
     if not bin_record:
         raise HTTPException(status_code=404, detail="Bin not found.")
 
-    # 2. Enforce Batch Rules
     if product.requires_batch_tracking and not receipt_in.batch_id:
         raise HTTPException(status_code=400, detail=f"Product {product.sku} requires a batch_id.")
         
-    # 3. Check if inventory record already exists for this exact Product + Batch + Bin combination
+    # 2. Record the Inventory
     inventory = db.query(inv_models.Inventory).filter(
         inv_models.Inventory.product_id == receipt_in.product_id,
         inv_models.Inventory.bin_id == receipt_in.bin_id,
@@ -51,10 +52,8 @@ def receive_goods(receipt_in: schemas.InventoryReceive, db: Session = Depends(ge
     ).first()
 
     if inventory:
-        # Update existing stock
         inventory.qty_available += receipt_in.qty
     else:
-        # Create new stock record
         inventory = inv_models.Inventory(
             product_id=receipt_in.product_id,
             bin_id=receipt_in.bin_id,
@@ -65,6 +64,17 @@ def receive_goods(receipt_in: schemas.InventoryReceive, db: Session = Depends(ge
         
     db.commit()
     db.refresh(inventory)
+    
+    # --- 3. THE CROSS-DOCK TRIGGER ---
+    cross_docked_orders = auto_cross_dock(db, product_id=receipt_in.product_id)
+    
+    if cross_docked_orders:
+        db.refresh(inventory) # Refresh inventory since the cross-dock engine just reserved some of it!
+        
+        # We attach a dynamic attribute to the SQLAlchemy model so Pydantic picks it up
+        setattr(inventory, "cross_dock_message", 
+                f"🚨 CROSS-DOCK ALERT! Stock immediately routed to fulfill Orders: {cross_docked_orders}. Skip put-away and take items directly to Packing Desk!")
+
     return inventory
 
 @router.get("/", response_model=list[schemas.InventoryResponse])
