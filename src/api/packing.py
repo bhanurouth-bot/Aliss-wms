@@ -1,4 +1,6 @@
 # src/api/packing.py
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -79,6 +81,8 @@ def verify_and_pack_order(
 
     # 4. Success! Tape the box shut.
     order.status = OrderStatus.PACKED
+    order.packed_by = current_user.id 
+    order.packed_at = datetime.now()
     db.commit()
     
     return {

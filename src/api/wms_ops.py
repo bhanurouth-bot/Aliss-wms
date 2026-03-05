@@ -30,7 +30,8 @@ def execute_pick_scan(
         task_id=task_id,
         scanned_bin=payload.scanned_bin,
         scanned_product=payload.scanned_product,
-        qty_picked=payload.qty_picked
+        qty_picked=payload.qty_picked,
+        worker_id=current_user.id
     )
     
     return {

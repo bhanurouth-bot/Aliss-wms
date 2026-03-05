@@ -10,6 +10,8 @@ from src.models.inventory import Inventory
 from src.schemas import purchasing as schemas
 from src.models.wms import Bin
 from src.services.order_svc import auto_cross_dock
+from src.models.purchase import SupplierProductCatalog # Add to your imports!
+
 
 router = APIRouter(prefix="/purchasing", tags=["Inbound POs & Receiving (GRN)"])
 
@@ -80,7 +82,7 @@ def receive_po_and_generate_grn(
             raise HTTPException(status_code=400, detail=f"Over-shipment detected for Product ID {prod_id}! Expected {remaining_expected}, Scanned {scan_qty}. Send the extra items back!")
 
     grn_number = f"GRN-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-    db_grn = GRN(grn_number=grn_number, po_id=po.id, notes=payload.notes)
+    db_grn = GRN(grn_number=grn_number, po_id=po.id, notes=payload.notes, received_by=current_user.id)
     db.add(db_grn)
     db.flush()
 
@@ -132,3 +134,41 @@ def receive_po_and_generate_grn(
         "new_po_status": po.status.name,
         "cross_dock_alerts": cross_dock_alerts # Show the worker the flashing alerts!
     }
+
+@router.post("/suppliers/{supplier_id}/catalog", response_model=schemas.CatalogItemResponse)
+def add_product_to_supplier_catalog(
+    supplier_id: int, 
+    payload: schemas.CatalogItemCreate, 
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["Admin", "Purchasing"]))
+):
+    """
+    Registers a contract with a supplier for a specific product, locking in 
+    the unit cost, Minimum Order Quantity (MOQ), and Lead Time.
+    """
+    supplier = db.query(Supplier).filter(Supplier.id == supplier_id).first()
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier not found.")
+        
+    # If this is marked as primary, unmark any other primary suppliers for this product
+    if payload.is_primary:
+        existing_primaries = db.query(SupplierProductCatalog).filter(
+            SupplierProductCatalog.product_id == payload.product_id,
+            SupplierProductCatalog.is_primary == True
+        ).all()
+        for ep in existing_primaries:
+            ep.is_primary = False
+
+    catalog_entry = SupplierProductCatalog(
+        supplier_id=supplier.id,
+        product_id=payload.product_id,
+        negotiated_unit_cost=payload.negotiated_unit_cost,
+        minimum_order_qty=payload.minimum_order_qty,
+        lead_time_days=payload.lead_time_days,
+        is_primary=payload.is_primary
+    )
+    
+    db.add(catalog_entry)
+    db.commit()
+    db.refresh(catalog_entry)
+    return catalog_entry

@@ -1,9 +1,10 @@
 # src/models/purchase.py
 import enum
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Enum as SQLEnum
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Boolean, Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from src.core.database import Base
+from src.models.product import Product
 
 class POStatus(enum.Enum):
     DRAFT = "DRAFT"
@@ -57,6 +58,7 @@ class GRN(Base):
     
     purchase_order = relationship("PurchaseOrder", back_populates="grns")
     items = relationship("GRNItem", back_populates="grn", cascade="all, delete-orphan")
+    received_by = Column(Integer, ForeignKey('users.id'), nullable=True)
 
 class GRNItem(Base):
     __tablename__ = 'grn_items'
@@ -68,3 +70,20 @@ class GRNItem(Base):
     qty_received = Column(Float)
     
     grn = relationship("GRN", back_populates="items")
+
+class SupplierProductCatalog(Base):
+    """The master pricing and constraints contract with a vendor."""
+    __tablename__ = 'supplier_product_catalog'
+    id = Column(Integer, primary_key=True, index=True)
+    supplier_id = Column(Integer, ForeignKey('suppliers.id'))
+    product_id = Column(Integer, ForeignKey('products.id'))
+    
+    # Financials & Constraints
+    negotiated_unit_cost = Column(Float, nullable=False)
+    minimum_order_qty = Column(Float, default=1.0) # Supplier won't ship less than this!
+    lead_time_days = Column(Integer, default=7)    # How long the truck takes to arrive
+    
+    is_primary = Column(Boolean, default=True)     # Use this supplier first for auto-reordering
+    
+    supplier = relationship("Supplier", backref="catalog_items")
+    product = relationship("Product")

@@ -6,66 +6,69 @@ from sqlalchemy import func
 
 from src.models.aps import ProductMetrics
 from src.models.inventory import Inventory
-# --- 1. Import the CORRECT models from the new Procurement Module ---
-from src.models.purchase import PurchaseOrder, PurchaseOrderItem, Supplier, POStatus
+from src.models.purchase import PurchaseOrder, PurchaseOrderItem, Supplier, POStatus, SupplierProductCatalog
 
 def run_replenishment_engine(db: Session):
-    """Calculates Reorder Points and auto-generates Draft POs."""
+    """Calculates Reorder Points and auto-generates Draft POs based on Supplier Contracts."""
     
     metrics = db.query(ProductMetrics).all()
     recommendations = []
-    
-    # --- 2. Ensure we have a default Supplier in the database for Auto-Drafts ---
-    default_supplier = db.query(Supplier).filter(Supplier.name == "Auto-Generated Default Supplier").first()
-    if not default_supplier:
-        default_supplier = Supplier(
-            name="Auto-Generated Default Supplier", 
-            contact_email="auto_procurement@erp.com", 
-            phone="0000000000"
-        )
-        db.add(default_supplier)
-        db.flush()
 
     for metric in metrics:
-        # 1. Apply the Formulas
-        safety_stock = metric.service_level_z_score * metric.demand_std_dev * math.sqrt(metric.lead_time_days)
-        reorder_point = (metric.avg_daily_demand * metric.lead_time_days) + safety_stock
+        # --- 1. FIND THE SUPPLIER CONTRACT ---
+        catalog_entry = db.query(SupplierProductCatalog).filter(
+            SupplierProductCatalog.product_id == metric.product_id,
+            SupplierProductCatalog.is_primary == True
+        ).first()
+
+        if not catalog_entry:
+            # We can't auto-order if we don't know who sells it to us!
+            continue 
+
+        # --- 2. THE MATHEMATICS (Using Real Supplier Lead Time!) ---
+        lead_time = catalog_entry.lead_time_days
+        safety_stock = metric.service_level_z_score * metric.demand_std_dev * math.sqrt(lead_time)
+        reorder_point = (metric.avg_daily_demand * lead_time) + safety_stock
         
-        # 2. Check actual stock across all bins (Available + Reserved)
+        # Check actual stock across all bins
         total_stock = db.query(func.sum(Inventory.qty_available + Inventory.qty_reserved)).filter(
             Inventory.product_id == metric.product_id
         ).scalar() or 0.0
         
-        # 3. Evaluate if we need to order
+        # --- 3. EVALUATE & ENFORCE MOQ ---
         if total_stock <= reorder_point:
-            # We need to order enough to cover lead time demand + safety stock
-            suggested_qty = math.ceil(reorder_point - total_stock + (metric.avg_daily_demand * 14)) # Order 2 weeks extra
+            # We need enough to cover the lead time + safety + 2 weeks buffer
+            needed_qty = math.ceil(reorder_point - total_stock + (metric.avg_daily_demand * 14))
             
-            # --- 4. Auto-Draft a Purchase Order (Using the NEW schema!) ---
+            # If we need 40, but the Supplier's Minimum Order Qty is 100, we MUST order 100.
+            suggested_qty = max(needed_qty, catalog_entry.minimum_order_qty)
+            
+            # --- 4. DRAFT THE INTELLIGENT PO ---
             po_number = f"AUTO-PO-{datetime.now().strftime('%Y%m%d%H%M%S')}-{metric.product_id}"
             
             po = PurchaseOrder(
                 po_number=po_number,
-                supplier_id=default_supplier.id,
-                status=POStatus.DRAFT # <-- Ensure it's just a DRAFT for the manager to review
+                supplier_id=catalog_entry.supplier_id,
+                status=POStatus.DRAFT # Keeps it as a draft for manager approval
             )
             db.add(po)
             db.flush()
             
-            # Use the new PurchaseOrderItem model
             po_item = PurchaseOrderItem(
                 po_id=po.id, 
                 product_id=metric.product_id, 
                 qty_ordered=suggested_qty,
-                unit_cost=0.0 # Will be updated when the PO is finalized
+                unit_cost=catalog_entry.negotiated_unit_cost # <-- WE NOW USE THE REAL COST!
             )
             db.add(po_item)
             
             recommendations.append({
                 "product_id": metric.product_id,
+                "supplier_id": catalog_entry.supplier_id,
                 "current_stock": total_stock,
                 "reorder_point": round(reorder_point, 2),
                 "suggested_order_qty": suggested_qty,
+                "unit_cost": catalog_entry.negotiated_unit_cost,
                 "action_taken": f"Drafted PO {po.po_number}"
             })
             

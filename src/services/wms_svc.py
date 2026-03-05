@@ -54,8 +54,11 @@ def confirm_pick_task(db: Session, task_id: int, scanned_bin: str, scanned_produ
 
     # 4. Update the Task
     task.qty_picked += qty_picked
+    task.worker_id = worker_id
+
     if task.qty_picked == task.qty_expected:
         task.status = TaskStatus.COMPLETED
+        task.completed_at = func.now()
     else:
         task.status = TaskStatus.IN_PROGRESS
 

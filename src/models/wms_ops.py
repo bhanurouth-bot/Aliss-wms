@@ -3,6 +3,8 @@ import enum
 from sqlalchemy import Column, Integer, ForeignKey, Float, String, Enum as SQLEnum
 from sqlalchemy.orm import relationship
 from src.core.database import Base
+from sqlalchemy import DateTime
+from sqlalchemy.sql import func
 
 class TaskStatus(enum.Enum):
     PENDING = "PENDING"
@@ -36,3 +38,6 @@ class PickTask(Base):
     status = Column(SQLEnum(TaskStatus), default=TaskStatus.PENDING)
     
     wave = relationship("PickingWave", back_populates="tasks")
+
+    worker_id = Column(Integer, ForeignKey('users.id'), nullable=True) # Who picked it?
+    completed_at = Column(DateTime(timezone=True), nullable=True)

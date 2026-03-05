@@ -40,3 +40,15 @@ class GRNItemScan(BaseModel):
 class GRNCreateRequest(BaseModel):
     notes: Optional[str] = "Delivery arrived via FedEx"
     scanned_items: List[GRNItemScan]
+
+class CatalogItemCreate(BaseModel):
+    product_id: int
+    negotiated_unit_cost: float
+    minimum_order_qty: float = 1.0
+    lead_time_days: int = 7
+    is_primary: bool = True
+
+class CatalogItemResponse(CatalogItemCreate):
+    id: int
+    supplier_id: int
+    model_config = {"from_attributes": True}

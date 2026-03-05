@@ -36,6 +36,9 @@ class Order(Base):
     external_reference = Column(String, unique=True, nullable=True, index=True) 
     
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
+    packed_by = Column(Integer, ForeignKey('users.id'), nullable=True) # Who taped the box shut?
+    packed_at = Column(DateTime(timezone=True), nullable=True)
+
 
 class OrderItem(Base):
     __tablename__ = 'order_items'
