@@ -1,26 +1,24 @@
 # src/services/wms_svc.py
 from sqlalchemy.orm import Session
-from src.models.wms_ops import Picklist, PickTask
 from fastapi import HTTPException
-from src.models.wms_ops import TaskStatus
+from sqlalchemy import func
+
+# --- Notice we removed Picklist and added PickingWave ---
+from src.models.wms_ops import PickTask, PickingWave, TaskStatus 
 from src.models.wms import Bin
 from src.models.product import Product
 from src.models.inventory import Inventory
 from src.models.order import Order, OrderStatus
-from sqlalchemy import func
 from src.worker.tasks import send_inventory_webhook
 
 def generate_picklist(db: Session, order_id: int, allocations: list):
     """
     Takes the FEFO inventory allocations and generates physical pick tasks.
+    We now link the tasks directly to the Order instead of a middleman Picklist!
     """
-    picklist = Picklist(order_id=order_id)
-    db.add(picklist)
-    db.flush() # Get the picklist ID immediately
-
     for alloc in allocations:
         task = PickTask(
-            picklist_id=picklist.id,
+            order_id=order_id, # <--- Direct link to the order
             product_id=alloc['product_id'],
             bin_id=alloc['bin_id'],
             batch_id=alloc['batch_id'],
@@ -29,7 +27,7 @@ def generate_picklist(db: Session, order_id: int, allocations: list):
         db.add(task)
         
     db.flush()
-    return picklist
+    return True
 
 def confirm_pick_task(db: Session, task_id: int, scanned_bin: str, scanned_product: str, qty_picked: float):
     # 1. Fetch the exact task
@@ -44,7 +42,7 @@ def confirm_pick_task(db: Session, task_id: int, scanned_bin: str, scanned_produ
     bin_record = db.query(Bin).filter(Bin.id == task.bin_id).first()
     product = db.query(Product).filter(Product.id == task.product_id).first()
 
-    # 3. THE SCANNER VALIDATION (Crucial for preventing shipping errors)
+    # 3. THE SCANNER VALIDATION
     if bin_record.barcode != scanned_bin:
         raise HTTPException(status_code=400, detail=f"Wrong Bin! Expected {bin_record.location_code}")
         
@@ -62,7 +60,6 @@ def confirm_pick_task(db: Session, task_id: int, scanned_bin: str, scanned_produ
         task.status = TaskStatus.IN_PROGRESS
 
     # 5. Permanently remove the stock from the Bin's Reserved pool
-    # (Remember, we already deducted it from 'Available' when the order was placed)
     inventory = db.query(Inventory).filter(
         Inventory.product_id == task.product_id,
         Inventory.bin_id == task.bin_id,
@@ -71,30 +68,35 @@ def confirm_pick_task(db: Session, task_id: int, scanned_bin: str, scanned_produ
     
     if inventory:
         inventory.qty_reserved -= qty_picked
-        # If the bin is now completely empty (0 available, 0 reserved), we could optionally delete the record or leave it at 0.
 
-    # 6. Check if the entire Picklist is now finished
-    picklist = db.query(Picklist).filter(Picklist.id == task.picklist_id).first()
-    all_tasks = db.query(PickTask).filter(PickTask.picklist_id == picklist.id).all()
-    
-    if all(t.status == TaskStatus.COMPLETED for t in all_tasks):
-        picklist.status = TaskStatus.COMPLETED
-        
-        # Advance the Order status to PICKED (meaning it's sitting at the packing desk)
-        order = db.query(Order).filter(Order.id == picklist.order_id).first()
-        if order:
-            order.status = OrderStatus.PICKED # <--- FIXED!
+    # --- 6. CHECK IF THE PARENT (ORDER OR WAVE) IS FINISHED ---
+    if task.order_id:
+        # This was a single order pick
+        all_tasks = db.query(PickTask).filter(PickTask.order_id == task.order_id).all()
+        if all(t.status == TaskStatus.COMPLETED for t in all_tasks):
+            order = db.query(Order).filter(Order.id == task.order_id).first()
+            if order:
+                order.status = OrderStatus.PICKED
+
+    elif task.wave_id:
+        # This was a massive Bulk Wave pick!
+        all_tasks = db.query(PickTask).filter(PickTask.wave_id == task.wave_id).all()
+        if all(t.status == TaskStatus.COMPLETED for t in all_tasks):
+            wave = db.query(PickingWave).filter(PickingWave.id == task.wave_id).first()
+            if wave:
+                wave.status = TaskStatus.COMPLETED
+                # Auto-update ALL orders inside this wave so the packers can start boxing them
+                for order in wave.orders:
+                    order.status = OrderStatus.PICKED
 
     db.commit()
     db.refresh(task)
     
-    # --- NEW: TRIGGER REAL-TIME WEBSITE SYNC ---
-    # Calculate the total available stock for this product across the whole warehouse
+    # 7. TRIGGER REAL-TIME WEBSITE SYNC
     total_available = db.query(func.sum(Inventory.qty_available)).filter(
         Inventory.product_id == task.product_id
     ).scalar() or 0.0
     
-    # Drop the message into RabbitMQ so Celery can send it in the background!
     send_inventory_webhook.delay(product_id=task.product_id, new_available_qty=total_available)
 
     return task

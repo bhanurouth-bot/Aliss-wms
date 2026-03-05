@@ -1,58 +1,96 @@
 # src/api/billing.py
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from datetime import datetime, timedelta
+
 from src.core.database import get_db
-from src.schemas import billing as schemas
-from src.models.billing import Invoice, InvoiceStatus
 from src.core.security import require_role
+from src.models.order import Order, CustomerType
+from src.models.product import Product
+from src.models.billing import Invoice, InvoiceItem, InvoiceStatus
+from src.schemas import billing as schemas
 
-# Import the logic for calculating totals and creating the database record
-from src.services.billing_svc import generate_invoice_from_order
+router = APIRouter(prefix="/billing", tags=["Financials & Invoicing"])
 
-# Import the logic for drawing the physical PDF
-from src.services.pdf_svc import generate_invoice_pdf
-
-router = APIRouter(prefix="/billing", tags=["Billing & Invoicing"])
-
-@router.post("/generate/{order_id}", response_model=schemas.InvoiceResponse, status_code=201)
-def generate_invoice(order_id: int, db: Session = Depends(get_db)):
-    """Generate a financial invoice from an existing Sales Order."""
-    return generate_invoice_from_order(db, order_id)
-
-@router.post("/{invoice_id}/pay", response_model=schemas.InvoiceResponse)
-def mark_invoice_paid(
-    invoice_id: int, 
+@router.post("/generate/{order_id}", response_model=schemas.InvoiceResponse)
+def generate_invoice(
+    order_id: int, 
     db: Session = Depends(get_db),
     current_user = Depends(require_role(["Admin", "Finance"]))
 ):
-    """Mark an invoice as fully paid (Requires Finance or Admin role)."""
-    invoice = db.query(Invoice).filter(Invoice.id == invoice_id).first()
-    if not invoice:
-        raise HTTPException(status_code=404, detail="Invoice not found")
+    """
+    Generates a financial invoice based on ACTUAL shipped quantities.
+    Applies B2B Wholesale discounts and Net-30 payment terms automatically.
+    """
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
         
-    invoice.status = InvoiceStatus.PAID
-    db.commit()
-    db.refresh(invoice)
-    return invoice
+    existing_invoice = db.query(Invoice).filter(Invoice.order_id == order.id).first()
+    if existing_invoice:
+        raise HTTPException(status_code=400, detail="Invoice already exists for this order.")
 
-@router.get("/{invoice_id}/pdf")
-def download_invoice_pdf(
-    invoice_id: int, 
-    db: Session = Depends(get_db),
-    current_user = Depends(require_role(["Admin", "Finance", "Sales"]))
-):
-    """Generates and downloads a physical PDF of the invoice."""
+    invoice_number = f"INV-{datetime.now().strftime('%Y%m%d')}-{order.id:04d}"
     
-    # Notice we are calling generate_invoice_pdf here!
-    pdf_buffer, inv_number = generate_invoice_pdf(db, invoice_id)
+    # --- WHOLESALE RULE: B2B buyers get a 20% discount on base price ---
+    B2B_DISCOUNT_RATE = 0.20 
     
-    headers = {
-        "Content-Disposition": f"attachment; filename={inv_number}.pdf"
-    }
-    
-    return StreamingResponse(
-        pdf_buffer, 
-        media_type="application/pdf", 
-        headers=headers
+    db_invoice = Invoice(
+        invoice_number=invoice_number,
+        order_id=order.id,
+        # B2B gets 30 days to pay. B2C is expected to pay immediately.
+        due_date=datetime.now() + timedelta(days=30) if order.order_type == CustomerType.B2B else datetime.now(),
+        status=InvoiceStatus.UNPAID if order.order_type == CustomerType.B2B else InvoiceStatus.PAID
     )
+    db.add(db_invoice)
+    db.flush()
+
+    subtotal = 0.0
+    tax_total = 0.0
+    discount_total = 0.0
+
+    for item in order.items:
+        # Crucial ERP Rule: You NEVER bill for backordered items! Only what you allocate/ship.
+        if item.qty_allocated <= 0:
+            continue 
+            
+        product = db.query(Product).filter(Product.id == item.product_id).first()
+        
+        # --- THE PRICING SPLIT ---
+        if order.order_type == CustomerType.B2B:
+            # 1. Start with Base Price, apply 20% discount
+            unit_price = product.base_price * (1 - B2B_DISCOUNT_RATE)
+            discount_total += (product.base_price - unit_price) * item.qty_allocated
+            
+            # 2. Add GST explicitly on top of the discounted price
+            line_tax = (unit_price * (product.gst_percent / 100)) * item.qty_allocated
+            line_total = (unit_price * item.qty_allocated) + line_tax
+            
+        else:
+            # B2C: The customer already agreed to pay the MRP (which includes tax)
+            # We just reverse-engineer the tax for the receipt.
+            unit_price = product.mrp / (1 + (product.gst_percent / 100))
+            line_total = product.mrp * item.qty_allocated
+            line_tax = line_total - (unit_price * item.qty_allocated)
+            
+        subtotal += (unit_price * item.qty_allocated)
+        tax_total += line_tax
+        
+        db_item = InvoiceItem(
+            invoice_id=db_invoice.id,
+            product_id=product.id,
+            qty=item.qty_allocated,
+            unit_price=round(unit_price, 2),
+            tax_amount=round(line_tax, 2),
+            line_total=round(line_total, 2)
+        )
+        db.add(db_item)
+
+    db_invoice.subtotal = round(subtotal, 2)
+    db_invoice.tax_total = round(tax_total, 2)
+    db_invoice.discount_total = round(discount_total, 2)
+    db_invoice.grand_total = round(subtotal + tax_total, 2)
+    
+    db.commit()
+    db.refresh(db_invoice)
+    return db_invoice
