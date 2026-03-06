@@ -5,11 +5,11 @@ import enum
 from src.core.database import Base
 
 class OrderStatus(enum.Enum):
-    PENDING = "PENDING"
-    WAVED = "WAVED"           # <--- NEW: Assigned to a bulk wave, waiting to be picked
-    PROCESSING = "PROCESSING" 
-    PICKED = "PICKED"         
-    PACKED = "PACKED"         
+    PENDING = "PENDING"           # 1. Order Placed
+    IN_PROCESS = "IN_PROCESS"     # 2. Wave Generated (PDF handed to picker)
+    CHECKING = "CHECKING"         # 3. Pick Scanned/Completed (Waiting at QC desk)
+    PACKING = "PACKING"           # 4. Checked & Bill Printed (Ready for a box)
+    PACKED = "PACKED"             # 5. Box taped and labeled
     SHIPPED = "SHIPPED"
     CANCELLED = "CANCELLED"
     BACKORDERED = "BACKORDERED"

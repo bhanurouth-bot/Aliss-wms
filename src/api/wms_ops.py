@@ -10,9 +10,9 @@ from src.services.wms_svc import confirm_pick_task
 router = APIRouter(prefix="/wms/tasks", tags=["WMS Operations & Scanning"])
 
 class PickScanRequest(BaseModel):
-    scanned_bin: str      # The barcode of the physical Bin
-    scanned_product: str  # The barcode of the physical Product
-    qty_picked: float     # How many they are tossing into the cart
+    scanned_bin: str      
+    scanned_product: str  
+    qty_picked: float     
 
 @router.post("/{task_id}/scan")
 def execute_pick_scan(
@@ -23,7 +23,7 @@ def execute_pick_scan(
 ):
     """
     The Picker's Barcode Gun Endpoint. 
-    Validates physical location and item barcodes before confirming the pick.
+    Validates physical location and item barcodes before confirming the WAVE pick.
     """
     task = confirm_pick_task(
         db=db,
@@ -35,7 +35,8 @@ def execute_pick_scan(
     )
     
     return {
-        "message": "Scan accepted. Pick confirmed!", 
+        "message": "Scan accepted. Wave Pick confirmed!", 
         "task_id": task.id,
+        "wave_id": task.wave_id,
         "status": task.status.name
     }

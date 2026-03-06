@@ -38,7 +38,7 @@ def verify_and_pack_order(
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
         
-    if order.status != OrderStatus.PICKED:
+    if order.status != OrderStatus.PACKING:
         raise HTTPException(
             status_code=400, 
             detail=f"Order is not ready for packing. Current status: {order.status.name}"
@@ -86,9 +86,10 @@ def verify_and_pack_order(
     order.packed_by = current_user.id 
     order.packed_at = datetime.now()
     db.commit()
+    db.refresh(order)
     
     return {
-        "message": "Verification Successful. All items match perfectly. Box is PACKED and ready for shipping label.",
+        "message": "Order successfully packed and ready for shipping!",
         "order_id": order.id,
         "status": order.status.name
     }
@@ -197,3 +198,11 @@ def calculate_optimal_box(
         "estimated_fill_rate": f"{best_box['fill_percentage']}%",
         "final_shipping_weight_kg": best_box["total_shipping_weight"]
     }
+
+@router.get("/boxes")
+def get_all_packaging_boxes(
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["Admin", "Warehouse Manager", "Warehouse Staff"]))
+):
+    """View all registered shipping boxes."""
+    return db.query(PackagingBox).all()

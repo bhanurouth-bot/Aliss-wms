@@ -5,53 +5,55 @@ from pydantic import BaseModel
 
 from src.core.database import get_db
 from src.core.security import require_role
-from src.models.inventory import Inventory, ProductBatch, QCStatus
+from src.models.order import Order, OrderStatus
+# Assume you have a PDF service to generate bills
+# from src.services.pdf_svc import generate_invoice_pdf 
 
-router = APIRouter(prefix="/qc", tags=["Quality Control & Holds"])
+router = APIRouter(prefix="/wms/qc", tags=["Quality Control & Billing"])
 
-class BatchHoldRequest(BaseModel):
-    batch_id: int
-    new_status: str # "QUARANTINED" or "RECALLED" or "AVAILABLE"
-    reason: str
+class VerifyOrderRequest(BaseModel):
+    # Could include a list of scanned item barcodes if you want strict QC validation
+    pass 
 
-@router.post("/batch-hold")
-def apply_global_batch_hold(
-    payload: BatchHoldRequest,
+@router.post("/orders/{order_id}/verify-and-bill")
+def verify_order_and_print_bill(
+    order_id: int, 
+    # payload: VerifyOrderRequest, # Uncomment if you want strict item verification at QC
     db: Session = Depends(get_db),
-    current_user = Depends(require_role(["Admin", "Compliance Officer"]))
+    current_user = Depends(require_role(["Admin", "QC Staff", "Warehouse Manager"]))
 ):
     """
-    The Kill Switch: Instantly changes the QC status of a specific batch 
-    across EVERY bin and warehouse in the entire company.
+    Confirms the physical items have arrived at the QC desk, generates the bill, 
+    and moves the order to the Packing lane.
     """
-    try:
-        target_status = QCStatus(payload.new_status.upper())
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid status. Use AVAILABLE, QUARANTINED, or RECALLED.")
-
-    batch = db.query(ProductBatch).filter(ProductBatch.id == payload.batch_id).first()
-    if not batch:
-        raise HTTPException(status_code=404, detail="Batch not found.")
-
-    # Find every single bin in the world that holds this batch
-    affected_inventory = db.query(Inventory).filter(Inventory.batch_id == batch.id).all()
+    order = db.query(Order).filter(Order.id == order_id).first()
     
-    if not affected_inventory:
-        return {"message": f"No physical inventory found for Batch {batch.batch_number}."}
-
-    units_frozen = 0
-    for inv in affected_inventory:
-        inv.qc_status = target_status
-        units_frozen += inv.qty_available
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found.")
         
-        # Note: If stock is already in 'qty_reserved' (meaning it's currently on a picklist),
-        # an advanced ERP would also actively cancel those pending PickTasks here! 
+    # Enforce strict linear workflow: Order MUST be picked and waiting for checks
+    if order.status != OrderStatus.CHECKING:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Order must be in CHECKING state. Currently: {order.status.name}"
+        )
 
+    # --- [Optional: Logic to strictly verify scanned barcodes against order items] ---
+    
+    # --- [Logic to generate the PDF Bill] ---
+    # pdf_buffer, invoice_number = generate_invoice_pdf(db, order.id)
+    invoice_number = f"INV-{order.id}000" # Placeholder
+    
+    # Move the order state to the PACKING lane
+    order.status = OrderStatus.PACKING
     db.commit()
+    db.refresh(order)
     
     return {
-        "message": f"GLOBAL HOLD EXECUTED. {target_status.name} applied to Batch {batch.batch_number}.",
-        "bins_affected": len(affected_inventory),
-        "total_units_frozen": units_frozen,
-        "reason_logged": payload.reason
+        "message": "Order successfully verified and bill generated.",
+        "order_id": order.id,
+        "invoice_number": invoice_number,
+        "previous_status": "CHECKING",
+        "current_status": order.status.name,
+        "bill_download_url": f"/api/billing/download/{order.id}" # Link frontend can use to auto-print
     }

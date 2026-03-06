@@ -6,11 +6,13 @@ from sqlalchemy import func
 from src.models.inventory import Inventory, ProductBatch, QCStatus 
 from src.models.order import Order, OrderItem, OrderStatus, CustomerType
 from src.schemas.order import OrderCreate
-from src.services.wms_svc import generate_picklist
 from src.models.product import Product
 
+# --- IMPORT THESE NEW MODELS ---
+from src.models.wms_ops import PickTask, TaskStatus
+
 def create_order_with_fefo_reservation(db: Session, order_in: OrderCreate, allow_backorder: bool = False):
-    """Creates an order. Explodes Kits into components and secures physical inventory via FEFO."""
+    """Creates an order, explodes Kits into components, and secures physical inventory via FEFO."""
     
     is_single_sku = len(order_in.items) == 1
 
@@ -21,9 +23,8 @@ def create_order_with_fefo_reservation(db: Session, order_in: OrderCreate, allow
         is_single_sku=is_single_sku
     )
     db.add(db_order)
-    db.flush() 
+    db.flush() # Flushes so we get db_order.id
     
-    allocations = [] 
     is_backordered = False
     
     for item in order_in.items:
@@ -58,7 +59,7 @@ def create_order_with_fefo_reservation(db: Session, order_in: OrderCreate, allow
                 .filter(
                     Inventory.product_id == comp_req["product_id"], 
                     Inventory.qty_available > 0,
-                    Inventory.qc_status == QCStatus.AVAILABLE # THE SHIELD
+                    Inventory.qc_status == QCStatus.AVAILABLE
                 )
                 .order_by(ProductBatch.expiry_date.asc())
                 .with_for_update() 
@@ -73,18 +74,24 @@ def create_order_with_fefo_reservation(db: Session, order_in: OrderCreate, allow
                     
                 qty_to_take = min(inv.qty_available, remaining_qty_to_reserve)
                 
+                # Physical inventory reservation
                 inv.qty_available -= qty_to_take
                 inv.qty_reserved += qty_to_take
                 remaining_qty_to_reserve -= qty_to_take
                 
-                allocations.append({
-                    "product_id": comp_req["product_id"],
-                    "bin_id": inv.bin_id,
-                    "batch_id": inv.batch_id,
-                    "qty": qty_to_take
-                })
+                # --- REAL LOGIC: CREATE THE INITIAL PICK TASK ---
+                # We MUST save which bin we reserved this from so the Wave Generator knows!
+                initial_task = PickTask(
+                    order_id=db_order.id,
+                    product_id=comp_req["product_id"],
+                    bin_id=inv.bin_id,
+                    batch_id=inv.batch_id,
+                    qty_expected=qty_to_take,
+                    qty_picked=0.0,
+                    status=TaskStatus.PENDING
+                )
+                db.add(initial_task)
             
-            # If any component of the kit is missing, the whole kit fails!
             if remaining_qty_to_reserve > 0:
                 kit_fully_allocated = False
                 
@@ -107,12 +114,10 @@ def create_order_with_fefo_reservation(db: Session, order_in: OrderCreate, allow
     if is_backordered:
         db_order.status = OrderStatus.BACKORDERED
             
-    if allocations:
-        generate_picklist(db, db_order.id, allocations)
-            
     db.commit()
     db.refresh(db_order)
     return db_order
+
 
 def allocate_backordered_order(db: Session, order_id: int):
     """Attempts to fulfill missing items (and exploded kits) for a backordered sales order."""
@@ -121,7 +126,6 @@ def allocate_backordered_order(db: Session, order_id: int):
     if not order or order.status != OrderStatus.BACKORDERED:
         raise HTTPException(status_code=400, detail="Order is not in BACKORDERED status.")
         
-    allocations = [] 
     still_backordered = False
     
     for item in order.items:
@@ -144,7 +148,6 @@ def allocate_backordered_order(db: Session, order_id: int):
 
         kit_fully_allocated = True
         
-        # PRE-CHECK: Do we have enough inventory for ALL components? (All or nothing!)
         for comp_req in components_to_allocate:
             available_stock = db.query(func.sum(Inventory.qty_available)).filter(
                 Inventory.product_id == comp_req["product_id"],
@@ -159,7 +162,6 @@ def allocate_backordered_order(db: Session, order_id: int):
             still_backordered = True
             continue 
             
-        # If we have enough for the whole kit, execute the physical reservation
         for comp_req in components_to_allocate:
             inventory_records = (
                 db.query(Inventory)
@@ -186,18 +188,20 @@ def allocate_backordered_order(db: Session, order_id: int):
                 inv.qty_reserved += qty_to_take
                 remaining_to_fulfill -= qty_to_take
                 
-                allocations.append({
-                    "product_id": comp_req["product_id"],
-                    "bin_id": inv.bin_id,
-                    "batch_id": inv.batch_id,
-                    "qty": qty_to_take
-                })
+                # --- REAL LOGIC: CREATE THE BACKORDER PICK TASK ---
+                backorder_task = PickTask(
+                    order_id=order.id,
+                    product_id=comp_req["product_id"],
+                    bin_id=inv.bin_id,
+                    batch_id=inv.batch_id,
+                    qty_expected=qty_to_take,
+                    qty_picked=0.0,
+                    status=TaskStatus.PENDING
+                )
+                db.add(backorder_task)
                 
         item.qty_allocated += item.qty_backordered
         item.qty_backordered = 0
-        
-    if allocations:
-        generate_picklist(db, order.id, allocations)
         
     if not still_backordered:
         order.status = OrderStatus.PENDING 
@@ -207,5 +211,25 @@ def allocate_backordered_order(db: Session, order_id: int):
     return order
 
 def auto_cross_dock(db: Session, product_id: int):
-    # Keep your existing auto_cross_dock function here...
-    pass
+    """Sweeps the Backorder queue for any orders waiting on this product."""
+    backordered_orders = (
+        db.query(Order)
+        .join(OrderItem)
+        .filter(
+            Order.status == OrderStatus.BACKORDERED,
+            OrderItem.product_id == product_id,
+            OrderItem.qty_backordered > 0
+        )
+        .order_by(Order.id.asc()) 
+        .all()
+    )
+
+    cross_docked_order_ids = []
+    
+    for order in backordered_orders:
+        allocate_backordered_order(db, order.id)
+        db.refresh(order)
+        if order.status != OrderStatus.BACKORDERED:
+            cross_docked_order_ids.append(order.id)
+
+    return cross_docked_order_ids

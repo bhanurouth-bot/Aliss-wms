@@ -12,6 +12,11 @@ from fastapi.responses import StreamingResponse
 from src.schemas import wms_ops as wms_schemas
 from src.services.pdf_svc import generate_wave_pdf
 from src.models.product import Product
+from src.models.wms_ops import PickTask, TaskStatus
+from src.models.order import Order, OrderStatus, CustomerType
+from src.models.wms_ops import PickingWave, PickTask, TaskStatus 
+from src.core.database import get_db
+
 
 router = APIRouter(prefix="/wms/waves", tags=["Smart Wave Picking"])
 
@@ -56,8 +61,9 @@ def generate_smart_wave(
     
     for order in matching_orders:
         order.wave_id = wave.id
-        order.status = OrderStatus.WAVED # Move status so it doesn't get picked twice!
-        
+        # --- UPDATE THIS LINE ---
+        order.status = OrderStatus.IN_PROCESS
+
         # We find the individual pick tasks the FEFO engine already generated for this order
         # and we crush them together!
         existing_tasks = db.query(PickTask).filter(PickTask.order_id == order.id).all()

@@ -3,7 +3,6 @@ from sqlalchemy.orm import Session
 from fastapi import HTTPException
 from sqlalchemy import func
 
-# --- Notice we removed Picklist and added PickingWave ---
 from src.models.wms_ops import PickTask, PickingWave, TaskStatus 
 from src.models.wms import Bin
 from src.models.product import Product
@@ -11,25 +10,15 @@ from src.models.inventory import Inventory
 from src.models.order import Order, OrderStatus
 from src.worker.tasks import send_inventory_webhook
 
-def generate_picklist(db: Session, order_id: int, allocations: list):
-    """
-    Takes the FEFO inventory allocations and generates physical pick tasks.
-    We now link the tasks directly to the Order instead of a middleman Picklist!
-    """
-    for alloc in allocations:
-        task = PickTask(
-            order_id=order_id, # <--- Direct link to the order
-            product_id=alloc['product_id'],
-            bin_id=alloc['bin_id'],
-            batch_id=alloc['batch_id'],
-            qty_expected=alloc['qty']
-        )
-        db.add(task)
-        
-    db.flush()
-    return True
 
-def confirm_pick_task(db: Session, task_id: int, scanned_bin: str, scanned_product: str, qty_picked: float):
+def confirm_pick_task(
+    db: Session, 
+    task_id: int, 
+    scanned_bin: str, 
+    scanned_product: str, 
+    qty_picked: float,
+    worker_id: int
+):
     # 1. Fetch the exact task
     task = db.query(PickTask).filter(PickTask.id == task_id).first()
     if not task:
@@ -52,15 +41,17 @@ def confirm_pick_task(db: Session, task_id: int, scanned_bin: str, scanned_produ
     if qty_picked + task.qty_picked > task.qty_expected:
         raise HTTPException(status_code=400, detail="Cannot over-pick. You are scanning too many items.")
 
-    # 4. Update the Task
+    # 4. Update the Task with Worker Accountability
     task.qty_picked += qty_picked
     task.worker_id = worker_id
 
-    if task.qty_picked == task.qty_expected:
+    if task.qty_picked >= task.qty_expected: 
         task.status = TaskStatus.COMPLETED
         task.completed_at = func.now()
     else:
         task.status = TaskStatus.IN_PROGRESS
+
+    db.flush() 
 
     # 5. Permanently remove the stock from the Bin's Reserved pool
     inventory = db.query(Inventory).filter(
@@ -74,23 +65,32 @@ def confirm_pick_task(db: Session, task_id: int, scanned_bin: str, scanned_produ
 
     # --- 6. CHECK IF THE PARENT (ORDER OR WAVE) IS FINISHED ---
     if task.order_id:
-        # This was a single order pick
-        all_tasks = db.query(PickTask).filter(PickTask.order_id == task.order_id).all()
-        if all(t.status == TaskStatus.COMPLETED for t in all_tasks):
+        # Ask the DB: Are there any tasks for this order that are NOT completed?
+        incomplete_tasks = db.query(PickTask).filter(
+            PickTask.order_id == task.order_id,
+            PickTask.status != TaskStatus.COMPLETED
+        ).count()
+        
+        if incomplete_tasks == 0:
             order = db.query(Order).filter(Order.id == task.order_id).first()
             if order:
-                order.status = OrderStatus.PICKED
+                order.status = OrderStatus.CHECKING
 
     elif task.wave_id:
-        # This was a massive Bulk Wave pick!
-        all_tasks = db.query(PickTask).filter(PickTask.wave_id == task.wave_id).all()
-        if all(t.status == TaskStatus.COMPLETED for t in all_tasks):
+        # Ask the DB: Are there any tasks for this wave that are NOT completed?
+        incomplete_tasks = db.query(PickTask).filter(
+            PickTask.wave_id == task.wave_id,
+            PickTask.status != TaskStatus.COMPLETED
+        ).count()
+        
+        if incomplete_tasks == 0:
             wave = db.query(PickingWave).filter(PickingWave.id == task.wave_id).first()
             if wave:
                 wave.status = TaskStatus.COMPLETED
-                # Auto-update ALL orders inside this wave so the packers can start boxing them
+                
+                # Auto-update ALL orders inside this wave to CHECKING
                 for order in wave.orders:
-                    order.status = OrderStatus.PICKED
+                    order.status = OrderStatus.CHECKING
 
     db.commit()
     db.refresh(task)
