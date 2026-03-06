@@ -32,9 +32,13 @@ class ZoneResponse(ZoneBase):
 
 # --- BIN SCHEMAS ---
 class BinBase(BaseModel):
-    location_code: str  # e.g., 'A-12-04'
-    barcode: str        # e.g., 'BIN-A1204'
+    location_code: str  
+    barcode: str        
     is_active: bool = True
+    
+    # --- ADD THESE! ---
+    max_weight_kg: float = 1000.0 
+    max_volume_cm3: float = 1000000.0
 
 class BinCreate(BinBase):
     zone_id: int

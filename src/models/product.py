@@ -5,21 +5,27 @@ from src.core.database import Base
 
 class Product(Base):
     __tablename__ = 'products'
-    
     id = Column(Integer, primary_key=True, index=True)
     sku = Column(String, unique=True, index=True)
     name = Column(String, index=True)
-    category = Column(String)
+    category = Column(String, index=True)
     barcode = Column(String, unique=True, index=True)
-    unit_type = Column(String)
-    
-    mrp = Column(Float, default=0.0)         
-    gst_percent = Column(Float, default=0.0) 
-    base_price = Column(Float, default=0.0)  
+    unit_type = Column(String) 
     requires_batch_tracking = Column(Boolean, default=False)
     
-    # --- NEW: KITTING FLAG ---
-    is_kit = Column(Boolean, default=False)
+    # --- FIXED: Added is_kit back! ---
+    is_kit = Column(Boolean, default=False) 
+    
+    # Pricing
+    base_price = Column(Float, default=0.0) 
+    mrp = Column(Float, default=0.0)
+    gst_percent = Column(Float, default=0.0)
+    
+    # --- PHYSICAL DIMENSIONS ---
+    weight_kg = Column(Float, default=0.0)
+    length_cm = Column(Float, default=0.0)
+    width_cm = Column(Float, default=0.0)
+    height_cm = Column(Float, default=0.0)
     
     # A product can have many components (if it is a kit)
     components = relationship(

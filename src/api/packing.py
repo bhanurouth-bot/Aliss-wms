@@ -10,6 +10,8 @@ from src.core.database import get_db
 from src.core.security import require_role
 from src.models.order import Order, OrderStatus
 from src.models.product import Product
+from src.models.wms import PackagingBox
+
 
 router = APIRouter(prefix="/packing", tags=["Packing & Verification"])
 
@@ -89,4 +91,109 @@ def verify_and_pack_order(
         "message": "Verification Successful. All items match perfectly. Box is PACKED and ready for shipping label.",
         "order_id": order.id,
         "status": order.status.name
+    }
+
+class BoxCreate(BaseModel):
+    name: str
+    length_cm: float
+    width_cm: float
+    height_cm: float
+    max_weight_kg: float
+    empty_weight_kg: float
+
+@router.post("/boxes", status_code=201)
+def create_packaging_box(
+    payload: BoxCreate, 
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["Admin", "Warehouse Manager"]))
+):
+    """Registers a new standard shipping box size into the WMS."""
+    box = PackagingBox(**payload.model_dump())
+    db.add(box)
+    db.commit()
+    db.refresh(box)
+    return box
+
+@router.get("/{order_id}/cartonize")
+def calculate_optimal_box(
+    order_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["Admin", "Warehouse Staff"]))
+):
+    """
+    The Cartonization Engine: Calculates the 3D volume and total weight of 
+    an order's items. If an item is a Kit, it dynamically explodes the kit 
+    to calculate the volume of its inner components!
+    """
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    total_volume_cm3 = 0.0
+    total_weight_kg = 0.0
+
+    # 1. Calculate the physics of the items
+    for item in order.items:
+        if item.qty_allocated <= 0:
+            continue
+            
+        product = db.query(Product).filter(Product.id == item.product_id).first()
+        
+        # --- NEW: KIT-AWARE CARTONIZATION ---
+        if product.components: # If this product has inner components, it's a Kit!
+            for kit_link in product.components:
+                comp_prod = kit_link.component
+                
+                # Volume of the internal component
+                comp_vol = comp_prod.length_cm * comp_prod.width_cm * comp_prod.height_cm
+                
+                # Multiply by (Qty of component in kit) * (Qty of kits ordered)
+                total_qty = kit_link.qty * item.qty_allocated
+                
+                total_volume_cm3 += (comp_vol * total_qty)
+                total_weight_kg += (comp_prod.weight_kg * total_qty)
+                
+        else:
+            # Standard single product
+            item_vol = product.length_cm * product.width_cm * product.height_cm
+            total_volume_cm3 += (item_vol * item.qty_allocated)
+            total_weight_kg += (product.weight_kg * item.qty_allocated)
+
+    if total_volume_cm3 == 0:
+        return {"message": "Items have no dimensions configured. Cannot calculate box size."}
+
+    # 2. Find all boxes that can fit the volume AND hold the weight
+    all_boxes = db.query(PackagingBox).all()
+    valid_boxes = []
+    
+    for box in all_boxes:
+        box_vol = box.length_cm * box.width_cm * box.height_cm
+        if box_vol >= total_volume_cm3 and box.max_weight_kg >= total_weight_kg:
+            valid_boxes.append({
+                "box_id": box.id,
+                "box_name": box.name,
+                "box_volume": box_vol,
+                "fill_percentage": round((total_volume_cm3 / box_vol) * 100, 2),
+                "total_shipping_weight": round(total_weight_kg + box.empty_weight_kg, 2)
+            })
+
+    if not valid_boxes:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"No box is large/strong enough! Volume: {total_volume_cm3}cm3, Weight: {total_weight_kg}kg. Consider splitting the order into multiple shipments."
+        )
+
+    # 3. Sort by volume to find the tightest fit (cheapest shipping cost!)
+    valid_boxes.sort(key=lambda x: x["box_volume"])
+    
+    best_box = valid_boxes[0]
+
+    return {
+        "message": "Cartonization successful.",
+        "order_id": order_id,
+        "items_volume_cm3": total_volume_cm3,
+        "items_weight_kg": total_weight_kg,
+        "recommended_box": best_box["box_name"],
+        "estimated_fill_rate": f"{best_box['fill_percentage']}%",
+        "final_shipping_weight_kg": best_box["total_shipping_weight"]
     }

@@ -21,7 +21,13 @@ class ProductBase(BaseModel):
     requires_batch_tracking: bool = False
     mrp: float
     gst_percent: float
-    is_kit: bool = False # <-- NEW
+    is_kit: bool = False
+    
+    # --- ADD THESE! ---
+    weight_kg: float = 0.0
+    length_cm: float = 0.0
+    width_cm: float = 0.0
+    height_cm: float = 0.0
 
 class ProductCreate(ProductBase):
     components: Optional[List[KitComponentCreate]] = None # <-- BOM Input
