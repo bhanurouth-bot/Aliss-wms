@@ -19,18 +19,26 @@ class ProductBase(BaseModel):
     barcode: str
     unit_type: str
     requires_batch_tracking: bool = False
+    
+    # --- NEW: HSN & Brand ---
+    hsn_code: Optional[str] = "N/A"
+    brand: Optional[str] = "N/A"
+    
     mrp: float
-    gst_percent: float
+    # --- REPLACED: gst_percent split into CGST and SGST ---
+    cgst_percent: float = 0.0
+    sgst_percent: float = 0.0
+    
     is_kit: bool = False
     
-    # --- ADD THESE! ---
+    # --- RETAINED: Your Dimensional Logic ---
     weight_kg: float = 0.0
     length_cm: float = 0.0
     width_cm: float = 0.0
     height_cm: float = 0.0
 
 class ProductCreate(ProductBase):
-    components: Optional[List[KitComponentCreate]] = None # <-- BOM Input
+    components: Optional[List[KitComponentCreate]] = None 
 
 class ProductResponse(ProductBase):
     id: int

@@ -10,27 +10,32 @@ class Product(Base):
     name = Column(String, index=True)
     category = Column(String, index=True)
     barcode = Column(String, unique=True, index=True)
-    unit_type = Column(String) 
+    unit_type = Column(String)
     requires_batch_tracking = Column(Boolean, default=False)
     
-    # --- FIXED: Added is_kit back! ---
-    is_kit = Column(Boolean, default=False) 
+    # --- NEW: HSN & Brand ---
+    hsn_code = Column(String, nullable=True)
+    brand = Column(String, nullable=True)
     
-    # Pricing
-    base_price = Column(Float, default=0.0) 
-    mrp = Column(Float, default=0.0)
-    gst_percent = Column(Float, default=0.0)
+    # Pricing & Taxes
+    mrp = Column(Float)
+    base_price = Column(Float) # Auto-calculated: MRP - Taxes
     
-    # --- PHYSICAL DIMENSIONS ---
+    # --- REPLACED: gst_percent split into CGST and SGST ---
+    cgst_percent = Column(Float, default=0.0) 
+    sgst_percent = Column(Float, default=0.0)
+    
+    # --- RETAINED: Your Dimensional Logic ---
     weight_kg = Column(Float, default=0.0)
     length_cm = Column(Float, default=0.0)
     width_cm = Column(Float, default=0.0)
     height_cm = Column(Float, default=0.0)
     
-    # A product can have many components (if it is a kit)
+    # Kit Logistics
+    is_kit = Column(Boolean, default=False)
     components = relationship(
         "KitComponent", 
-        foreign_keys="KitComponent.kit_id", 
+        foreign_keys="[KitComponent.kit_id]", 
         back_populates="kit", 
         cascade="all, delete-orphan"
     )

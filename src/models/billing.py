@@ -22,6 +22,8 @@ class Invoice(Base):
     subtotal = Column(Float, default=0.0)
     tax_total = Column(Float, default=0.0)
     discount_total = Column(Float, default=0.0)
+    # --- NEW: ROUND OFF COLUMN ---
+    round_off = Column(Float, default=0.0) 
     grand_total = Column(Float, default=0.0)
     
     status = Column(SQLEnum(InvoiceStatus), default=InvoiceStatus.UNPAID)
@@ -38,8 +40,14 @@ class InvoiceItem(Base):
     product_id = Column(Integer, ForeignKey('products.id'))
     
     qty = Column(Float)
-    unit_price = Column(Float) # The price actually charged (after B2B discounts)
-    tax_amount = Column(Float)
+    unit_price = Column(Float) 
+    
+    # --- NEW: EXPLICIT LEDGER COLUMNS ---
+    discount_amount = Column(Float, default=0.0)
+    cgst_amount = Column(Float, default=0.0)
+    sgst_amount = Column(Float, default=0.0)
+    
+    tax_amount = Column(Float) # Keep this as the Total Tax (CGST + SGST)
     line_total = Column(Float)
     
     invoice = relationship("Invoice", back_populates="items")

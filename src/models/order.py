@@ -24,19 +24,28 @@ class Order(Base):
     customer_name = Column(String, index=True)
     status = Column(SQLEnum(OrderStatus), default=OrderStatus.PENDING)
     
-    # --- NEW: SMART FILTERS ---
     order_type = Column(SQLEnum(CustomerType), default=CustomerType.B2C)
-    is_single_sku = Column(Boolean, default=True) # Used to group fast-pack orders
-    route = Column(String, nullable=True)         # e.g., "MORNING-DISPATCH", "FEDEX-EXPRESS"
-    cutoff_time = Column(DateTime, nullable=True) # Must be packed before this time
+    is_single_sku = Column(Boolean, default=True) 
+    route = Column(String, nullable=True)         
     
-    wave_id = Column(Integer, ForeignKey('picking_waves.id'), nullable=True) # Link to the bulk wave
+    # --- NEW: GENERAL BILLING DETAILS ---
+    email = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    billing_address = Column(String, nullable=True)
+    shipping_address = Column(String, nullable=True)
     
+    # --- NEW: B2B SPECIFIC DETAILS ---
+    company_name = Column(String, nullable=True) # Legal entity name
+    tax_id = Column(String, nullable=True)       # VAT/GST/EIN
+    po_number = Column(String, nullable=True)    # Purchase Order from the buyer
+    payment_terms = Column(String, nullable=True)# e.g., "NET_30", "DUE_ON_RECEIPT"
+    
+    wave_id = Column(Integer, ForeignKey('picking_waves.id'), nullable=True) 
     source = Column(String, default="MANUAL_ENTRY") 
     external_reference = Column(String, unique=True, nullable=True, index=True) 
     
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
-    packed_by = Column(Integer, ForeignKey('users.id'), nullable=True) # Who taped the box shut?
+    packed_by = Column(Integer, ForeignKey('users.id'), nullable=True) 
     packed_at = Column(DateTime(timezone=True), nullable=True)
 
 

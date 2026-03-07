@@ -6,7 +6,6 @@ from src.models import product as models
 from src.schemas import product as schemas
 from src.core.security import get_current_user
 from src.models.auth import User
-from src.services.audit_svc import log_activity
 from src.models.product import Product, KitComponent
 
 router = APIRouter(prefix="/products", tags=["Product Catalog"])
@@ -24,7 +23,9 @@ def create_product(
     if existing:
         raise HTTPException(status_code=400, detail="SKU or Barcode already exists.")
         
-    calculated_base_price = product_in.mrp / (1 + (product_in.gst_percent / 100.0))
+    # --- UPDATED: TAX MATH (CGST + SGST) ---
+    total_tax_percent = product_in.cgst_percent + product_in.sgst_percent
+    calculated_base_price = product_in.mrp / (1 + (total_tax_percent / 100.0))
     
     # Exclude components from the initial dictionary dump
     product_data = product_in.model_dump(exclude={"components"})
@@ -34,10 +35,9 @@ def create_product(
     db.add(db_product)
     db.flush() # Get the Product ID immediately!
     
-    # --- NEW: SAVE THE BILL OF MATERIALS ---
+    # SAVE THE BILL OF MATERIALS
     if product_in.is_kit and product_in.components:
         for comp in product_in.components:
-            # Verify the component actually exists
             child_product = db.query(Product).filter(Product.id == comp.component_id).first()
             if not child_product:
                 raise HTTPException(status_code=400, detail=f"Component ID {comp.component_id} does not exist.")
