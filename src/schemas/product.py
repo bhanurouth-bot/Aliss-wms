@@ -20,19 +20,19 @@ class ProductBase(BaseModel):
     unit_type: str
     requires_batch_tracking: bool = False
     
-    # --- NEW: HSN & Brand ---
-    hsn_code: Optional[str] = "N/A"
-    brand: Optional[str] = "N/A"
+    # 🐛 BUG FIX: Default to None instead of a string to prevent text-replacement corruption
+    hsn_code: Optional[str] = None
+    brand: Optional[str] = None
     
     mrp: float
+    # As you noted, the billing engine successfully reads this discount_percent!
     discount_percent: float = 0.0
-    # --- REPLACED: gst_percent split into CGST and SGST ---
+    
     cgst_percent: float = 0.0
     sgst_percent: float = 0.0
     
     is_kit: bool = False
     
-    # --- RETAINED: Your Dimensional Logic ---
     weight_kg: float = 0.0
     length_cm: float = 0.0
     width_cm: float = 0.0

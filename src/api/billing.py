@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
+from fastapi.responses import StreamingResponse
 
 from src.core.database import get_db
 from src.core.security import require_role
@@ -9,7 +10,6 @@ from src.models.order import Order, CustomerType
 from src.models.product import Product
 from src.models.billing import Invoice, InvoiceItem, InvoiceStatus
 from src.schemas import billing as schemas
-from fastapi.responses import StreamingResponse
 from src.services.pdf_svc import generate_invoice_pdf
 
 router = APIRouter(prefix="/billing", tags=["Financials & Invoicing"])
@@ -30,7 +30,7 @@ def generate_invoice(
 
     invoice_number = f"INV-{datetime.now().strftime('%Y%m%d')}-{order.id:04d}"
     
-    B2B_DISCOUNT_RATE = 0.20 
+    B2B_DISCOUNT_PCT = 20.0 
     
     db_invoice = Invoice(
         invoice_number=invoice_number,
@@ -46,63 +46,66 @@ def generate_invoice(
     discount_total = 0.0
     target_grand_total = 0.0 
 
-    # --- THE CRITICAL BUG FIX: ITEM AGGREGATION ---
-    # This prevents duplicate phantom rows by merging identical products!
     aggregated_qty = {}
     for item in order.items:
         if item.qty_allocated > 0:
-            aggregated_qty[item.product_id] = aggregated_qty.get(item.product_id, 0) + item.qty_allocated
+            aggregated_qty[item.product_id] = aggregated_qty.get(item.product_id, 0.0) + item.qty_allocated
 
-    # Now we loop through the CLEANED, aggregated data to build the bill
+    # FRESH, BULLETPROOF MATH LOGIC
     for product_id, qty in aggregated_qty.items():
         product = db.query(Product).filter(Product.id == product_id).first()
-        total_tax_percent = product.cgst_percent + product.sgst_percent
-        product_sale_discount = getattr(product, 'discount_percent', 0.0) / 100.0
         
+        # Taxes
+        cgst_pct = product.cgst_percent or 0.0
+        sgst_pct = product.sgst_percent or 0.0
+        total_tax_pct = cgst_pct + sgst_pct
+        
+        # Prices
+        base_rate = product.base_price or 0.0
+        mrp = product.mrp or 0.0
+        sale_discount_pct = getattr(product, 'discount_percent', 0.0) or 0.0
+
         if order.order_type == CustomerType.B2B:
-            # B2B gets their flat wholesale rate PLUS the current website sale
-            total_discount_rate = B2B_DISCOUNT_RATE + product_sale_discount
-            unit_price = product.base_price * (1 - total_discount_rate)
+            total_discount_pct = B2B_DISCOUNT_PCT + sale_discount_pct
             
-            line_discount = (product.base_price - unit_price) * qty
-            discount_total += line_discount
+            net_rate = base_rate * (1 - (total_discount_pct / 100.0))
+            taxable_value = net_rate * qty
             
-            cgst = (unit_price * (product.cgst_percent / 100)) * qty
-            sgst = (unit_price * (product.sgst_percent / 100)) * qty
-            line_tax = cgst + sgst
+            cgst_amt = taxable_value * (cgst_pct / 100.0)
+            sgst_amt = taxable_value * (sgst_pct / 100.0)
+            line_tax = cgst_amt + sgst_amt
             
-            line_total = (unit_price * qty) + line_tax
-            target_grand_total += line_total
+            line_total = taxable_value + line_tax
+            line_discount_amt = (base_rate - net_rate) * qty
             
         else:
-            # B2C customers get the dynamic sale discount off the MRP!
-            target_line_total = (product.mrp * (1 - product_sale_discount)) * qty
-            target_grand_total += target_line_total
+            total_discount_pct = sale_discount_pct
             
-            # Record how much money the B2C customer saved during the sale
-            original_mrp_total = product.mrp * qty
-            line_discount = original_mrp_total - target_line_total
-            discount_total += line_discount 
+            discounted_mrp = mrp * (1 - (total_discount_pct / 100.0))
+            line_total = discounted_mrp * qty
             
-            # Reverse engineer the taxes from the newly discounted price
-            unit_price = target_line_total / (1 + (total_tax_percent / 100)) / qty if qty > 0 else 0
+            taxable_value = line_total / (1 + (total_tax_pct / 100.0))
             
-            line_tax = target_line_total - (unit_price * qty)
-            cgst = line_tax * (product.cgst_percent / total_tax_percent) if total_tax_percent > 0 else 0.0
-            sgst = line_tax * (product.sgst_percent / total_tax_percent) if total_tax_percent > 0 else 0.0
-            line_total = target_line_total
+            cgst_amt = taxable_value * (cgst_pct / 100.0)
+            sgst_amt = taxable_value * (sgst_pct / 100.0)
+            line_tax = cgst_amt + sgst_amt
             
-        subtotal += (unit_price * qty)
+            net_rate = taxable_value / qty if qty > 0 else 0.0
+            line_discount_amt = (base_rate - net_rate) * qty
+
+        subtotal += taxable_value
         tax_total += line_tax
+        discount_total += line_discount_amt
+        target_grand_total += line_total
         
         db_item = InvoiceItem(
             invoice_id=db_invoice.id,
             product_id=product.id,
             qty=qty,
-            unit_price=round(unit_price, 2),
-            discount_amount=round(line_discount, 2), 
-            cgst_amount=round(cgst, 2),              
-            sgst_amount=round(sgst, 2),              
+            unit_price=round(net_rate, 2),
+            discount_amount=round(line_discount_amt, 2), 
+            cgst_amount=round(cgst_amt, 2),              
+            sgst_amount=round(sgst_amt, 2),              
             tax_amount=round(line_tax, 2),
             line_total=round(line_total, 2)
         )
@@ -110,15 +113,14 @@ def generate_invoice(
 
     rounded_subtotal = round(subtotal, 2)
     rounded_tax_total = round(tax_total, 2)
-    rounded_discount = round(discount_total, 2)
     rounded_target_grand = round(target_grand_total, 2) 
     
-    calculated_sum = rounded_subtotal + rounded_tax_total - rounded_discount
+    calculated_sum = rounded_subtotal + rounded_tax_total
     round_off_value = round(rounded_target_grand - calculated_sum, 2)
 
     db_invoice.subtotal = rounded_subtotal
     db_invoice.tax_total = rounded_tax_total
-    db_invoice.discount_total = rounded_discount
+    db_invoice.discount_total = round(discount_total, 2)
     db_invoice.round_off = round_off_value
     db_invoice.grand_total = rounded_target_grand
     
@@ -132,20 +134,6 @@ def download_invoice_pdf(
     db: Session = Depends(get_db),
     current_user = Depends(require_role(["Admin", "Finance"]))
 ):
-    """
-    Generates and downloads a beautifully formatted PDF copy of the invoice.
-    """
-    # 1. Generate the PDF in memory
     pdf_buffer, invoice_number = generate_invoice_pdf(db, invoice_id)
-    
-    # 2. Tell the browser to download it as a file with the correct name
-    headers = {
-        "Content-Disposition": f"attachment; filename={invoice_number}.pdf"
-    }
-    
-    # 3. Stream the raw bytes back to the user!
-    return StreamingResponse(
-        pdf_buffer, 
-        media_type="application/pdf", 
-        headers=headers
-    )
+    headers = {"Content-Disposition": f"attachment; filename={invoice_number}.pdf"}
+    return StreamingResponse(pdf_buffer, media_type="application/pdf", headers=headers)
