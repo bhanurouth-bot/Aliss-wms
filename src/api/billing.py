@@ -57,15 +57,16 @@ def generate_invoice(
     for product_id, qty in aggregated_qty.items():
         product = db.query(Product).filter(Product.id == product_id).first()
         total_tax_percent = product.cgst_percent + product.sgst_percent
+        product_sale_discount = getattr(product, 'discount_percent', 0.0) / 100.0
         
         if order.order_type == CustomerType.B2B:
-            unit_price = product.base_price * (1 - B2B_DISCOUNT_RATE)
+            # B2B gets their flat wholesale rate PLUS the current website sale
+            total_discount_rate = B2B_DISCOUNT_RATE + product_sale_discount
+            unit_price = product.base_price * (1 - total_discount_rate)
             
-            # Explicit Line-Item Discount
             line_discount = (product.base_price - unit_price) * qty
             discount_total += line_discount
             
-            # Explicit CGST / SGST
             cgst = (unit_price * (product.cgst_percent / 100)) * qty
             sgst = (unit_price * (product.sgst_percent / 100)) * qty
             line_tax = cgst + sgst
@@ -74,13 +75,18 @@ def generate_invoice(
             target_grand_total += line_total
             
         else:
-            target_line_total = product.mrp * qty
+            # B2C customers get the dynamic sale discount off the MRP!
+            target_line_total = (product.mrp * (1 - product_sale_discount)) * qty
             target_grand_total += target_line_total
             
-            unit_price = product.mrp / (1 + (total_tax_percent / 100))
-            line_discount = 0.0 # Consumers pay MRP
+            # Record how much money the B2C customer saved during the sale
+            original_mrp_total = product.mrp * qty
+            line_discount = original_mrp_total - target_line_total
+            discount_total += line_discount 
             
-            # Reverse engineer the total tax, then split it according to the product's ratio
+            # Reverse engineer the taxes from the newly discounted price
+            unit_price = target_line_total / (1 + (total_tax_percent / 100)) / qty if qty > 0 else 0
+            
             line_tax = target_line_total - (unit_price * qty)
             cgst = line_tax * (product.cgst_percent / total_tax_percent) if total_tax_percent > 0 else 0.0
             sgst = line_tax * (product.sgst_percent / total_tax_percent) if total_tax_percent > 0 else 0.0
@@ -94,9 +100,9 @@ def generate_invoice(
             product_id=product.id,
             qty=qty,
             unit_price=round(unit_price, 2),
-            discount_amount=round(line_discount, 2), # Saved to DB
-            cgst_amount=round(cgst, 2),              # Saved to DB
-            sgst_amount=round(sgst, 2),              # Saved to DB
+            discount_amount=round(line_discount, 2), 
+            cgst_amount=round(cgst, 2),              
+            sgst_amount=round(sgst, 2),              
             tax_amount=round(line_tax, 2),
             line_total=round(line_total, 2)
         )

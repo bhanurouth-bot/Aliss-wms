@@ -2,49 +2,65 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from src.core.database import get_db
-from src.models.shipping import Shipment
+from src.core.security import require_role
+
 from src.models.order import Order, OrderStatus
+from src.models.shipping import ShippingManifest
 from src.schemas import shipping as schemas
 
-# Import our new Celery task
+# --- IMPORT THE CELERY TASK ---
 from src.worker.tasks import send_shipping_webhook
 
-router = APIRouter(prefix="/shipping", tags=["Dispatch & Fulfillment"])
+router = APIRouter(prefix="/shipping", tags=["Shipping & Dispatch"])
 
-@router.post("/dispatch/{order_id}", response_model=schemas.ShipmentResponse, status_code=201)
-def dispatch_order(order_id: int, shipment_in: schemas.ShipmentCreate, db: Session = Depends(get_db)):
-    """
-    Marks an order as SHIPPED, records tracking info, and triggers 
-    an outbound webhook to notify the sales channel (Amazon/Shopify).
-    """
+@router.post("/dispatch/{order_id}", response_model=schemas.ShippingManifestResponse)
+def dispatch_order(
+    order_id: int, 
+    dispatch_data: schemas.ShippingDispatchCreate,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["Admin", "Warehouse Manager", "Dock Worker"]))
+):
+    # 1. Verify the order is actually PACKED
     order = db.query(Order).filter(Order.id == order_id).first()
-    
     if not order:
         raise HTTPException(status_code=404, detail="Order not found.")
         
     if order.status != OrderStatus.PACKED:
-        raise HTTPException(status_code=400, detail="Order is not ready for dispatch. Is it picked yet?")
-        
-    # 1. Create the Shipment record
-    db_shipment = Shipment(
-        order_id=order.id,
-        carrier=shipment_in.carrier,
-        tracking_number=shipment_in.tracking_number,
-        shipping_method=shipment_in.shipping_method
-    )
-    db.add(db_shipment)
-    
-    # 2. Update the Order Status
-    order.status = OrderStatus.SHIPPED
-    db.commit()
-    db.refresh(db_shipment)
-    
-    # 3. Fire the Webhook to Amazon/Shopify!
-    if order.external_reference:
-        send_shipping_webhook.delay(
-            external_reference=order.external_reference,
-            carrier=db_shipment.carrier,
-            tracking_number=db_shipment.tracking_number
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Order cannot be dispatched. Current status is {order.status.name}, expected PACKED."
         )
-        
-    return db_shipment
+
+    # 2. Check if it was already shipped
+    existing = db.query(ShippingManifest).filter(ShippingManifest.order_id == order.id).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Order has already been dispatched.")
+
+    # 3. Create the Shipping Manifest
+    manifest = ShippingManifest(
+        order_id=order.id,
+        carrier=dispatch_data.carrier,
+        tracking_number=dispatch_data.tracking_number,
+        actual_weight_kg=dispatch_data.actual_weight_kg,
+        shipping_cost=dispatch_data.shipping_cost
+    )
+    db.add(manifest)
+
+    # 4. Final State Transition
+    order.status = OrderStatus.SHIPPED
+    
+    db.commit()
+    db.refresh(manifest)
+    
+    # 5. --- FIRE THE WEBHOOK IN THE BACKGROUND ---
+    # We use order.external_reference (e.g., "AMZ-998877") so the external site knows which order this is.
+    # If there is no external reference, we just send the internal ERP ID.
+    reference_id = order.external_reference or str(order.id)
+    
+    send_shipping_webhook.delay(
+        external_reference=reference_id,
+        carrier=manifest.carrier,
+        tracking_number=manifest.tracking_number
+    )
+
+    return manifest

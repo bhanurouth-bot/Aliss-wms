@@ -20,6 +20,7 @@ class Product(Base):
     # Pricing & Taxes
     mrp = Column(Float)
     base_price = Column(Float) # Auto-calculated: MRP - Taxes
+    discount_percent = Column(Float, default=0.0) # e.g., 15.0 for a 15% off sale
     
     # --- REPLACED: gst_percent split into CGST and SGST ---
     cgst_percent = Column(Float, default=0.0) 

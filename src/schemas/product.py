@@ -25,6 +25,7 @@ class ProductBase(BaseModel):
     brand: Optional[str] = "N/A"
     
     mrp: float
+    discount_percent: float = 0.0
     # --- REPLACED: gst_percent split into CGST and SGST ---
     cgst_percent: float = 0.0
     sgst_percent: float = 0.0

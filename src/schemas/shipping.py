@@ -1,18 +1,23 @@
 # src/schemas/shipping.py
 from pydantic import BaseModel
+from typing import Optional
 from datetime import datetime
+from src.models.shipping import DeliveryStatus
 
-class ShipmentCreate(BaseModel):
+class ShippingDispatchCreate(BaseModel):
     carrier: str
     tracking_number: str
-    shipping_method: str
+    actual_weight_kg: float
+    shipping_cost: Optional[float] = 0.0
 
-class ShipmentResponse(BaseModel):
+class ShippingManifestResponse(BaseModel):
     id: int
     order_id: int
     carrier: str
     tracking_number: str
-    shipping_method: str
-    shipped_at: datetime
+    actual_weight_kg: float
+    shipping_cost: float
+    status: DeliveryStatus
+    dispatched_at: datetime
     
     model_config = {"from_attributes": True}

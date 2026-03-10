@@ -1,7 +1,7 @@
 # src/schemas/purchasing.py
 from pydantic import BaseModel
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime,date
 
 # --- PO Schemas ---
 class POItemCreate(BaseModel):
@@ -35,7 +35,10 @@ class GRNItemScan(BaseModel):
     product_id: int
     qty_received: float
     bin_id: int
-    batch_id: Optional[int] = None
+    
+    # --- NEW: Raw Batch Strings ---
+    batch_number: Optional[str] = None
+    expiry_date: Optional[date] = None
 
 class GRNCreateRequest(BaseModel):
     notes: Optional[str] = "Delivery arrived via FedEx"

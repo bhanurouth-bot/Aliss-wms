@@ -58,3 +58,38 @@ def create_product(
 def list_products(db: Session = Depends(get_db)):
     """Get the full product catalog."""
     return db.query(models.Product).all()
+
+@router.put("/discounts/category/{category_name}")
+def bulk_update_category_discount(
+    category_name: str, 
+    discount_percent: float, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Applies a sale discount to an entire category of products."""
+    products = db.query(Product).filter(Product.category == category_name).all()
+    if not products:
+        raise HTTPException(status_code=404, detail=f"No products found in category '{category_name}'.")
+        
+    for p in products:
+        p.discount_percent = discount_percent
+        
+    db.commit()
+    return {"message": f"Successfully applied {discount_percent}% discount to {len(products)} products in {category_name}."}
+
+
+@router.put("/discounts/sku/{sku}")
+def update_single_product_discount(
+    sku: str, 
+    discount_percent: float, 
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Applies a sale discount to a specific product."""
+    product = db.query(Product).filter(Product.sku == sku).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found.")
+        
+    product.discount_percent = discount_percent
+    db.commit()
+    return {"message": f"Successfully applied {discount_percent}% discount to SKU {sku}."}

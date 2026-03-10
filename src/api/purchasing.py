@@ -6,13 +6,11 @@ from typing import List
 
 from src.core.database import get_db
 from src.core.security import require_role
-from src.models.purchase import Supplier, PurchaseOrder, PurchaseOrderItem, POStatus, GRN, GRNItem
-from src.models.inventory import Inventory
+from src.models.purchase import Supplier, PurchaseOrder, PurchaseOrderItem, POStatus, GRN, GRNItem, SupplierProductCatalog
+from src.models.inventory import Inventory, ProductBatch  # <-- Added ProductBatch here!
 from src.schemas import purchasing as schemas
 from src.models.wms import Bin
 from src.services.order_svc import auto_cross_dock
-from src.models.purchase import SupplierProductCatalog # Add to your imports!
-
 
 router = APIRouter(prefix="/purchasing", tags=["Inbound POs & Receiving (GRN)"])
 
@@ -65,7 +63,7 @@ def receive_po_and_generate_grn(
     for item in payload.scanned_items:
         scanned_totals[item.product_id] = scanned_totals.get(item.product_id, 0) + item.qty_received
 
-        # --- 2. NEW: STRICT BIN VALIDATION! ---
+        # --- STRICT BIN VALIDATION! ---
         bin_record = db.query(Bin).filter(Bin.id == item.bin_id).first()
         if not bin_record:
             raise HTTPException(status_code=400, detail=f"Invalid location! Bin ID {item.bin_id} does not exist in the warehouse.")
@@ -101,22 +99,48 @@ def receive_po_and_generate_grn(
         )
         db.add(db_grn_item)
 
+        # --- NEW: DYNAMIC BATCH CREATION ---
+        actual_batch_id = None
+        
+        if getattr(item, 'batch_number', None):
+            # Check if this batch already exists in the warehouse
+            existing_batch = db.query(ProductBatch).filter(
+                ProductBatch.product_id == item.product_id,
+                ProductBatch.batch_number == item.batch_number
+            ).first()
+            
+            if existing_batch:
+                actual_batch_id = existing_batch.id
+            else:
+                # Create a brand new batch from the manufacturer!
+                new_batch = ProductBatch(
+                    product_id=item.product_id,
+                    batch_number=item.batch_number,
+                    expiry_date=item.expiry_date
+                )
+                db.add(new_batch)
+                db.flush() # Get the new batch ID
+                actual_batch_id = new_batch.id
+
+        # --- UPDATED INVENTORY LOGIC ---
         inventory = db.query(Inventory).filter(
             Inventory.product_id == item.product_id,
             Inventory.bin_id == item.bin_id,
-            Inventory.batch_id == item.batch_id
+            Inventory.batch_id == actual_batch_id
         ).first()
 
         if inventory:
             inventory.qty_available += item.qty_received
         else:
             new_inv = Inventory(
-                product_id=item.product_id, bin_id=item.bin_id, 
-                batch_id=item.batch_id, qty_available=item.qty_received
+                product_id=item.product_id, 
+                bin_id=item.bin_id, 
+                batch_id=actual_batch_id, 
+                qty_available=item.qty_received
             )
             db.add(new_inv)
 
-        # --- 3. NEW: TRIGGER THE CROSS-DOCK ENGINE! ---
+        # --- TRIGGER THE CROSS-DOCK ENGINE! ---
         cross_docked_orders = auto_cross_dock(db, product_id=item.product_id)
         if cross_docked_orders:
             cross_dock_alerts.append(f"🚨 CROSS-DOCK ALERT! {item.qty_received} units of Product {item.product_id} immediately routed to fulfill Orders: {cross_docked_orders}. Skip put-away and take items directly to Packing Desk!")
