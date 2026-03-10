@@ -91,7 +91,6 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
     for idx, item in enumerate(invoice.items, start=1):
         product = db.query(Product).filter(Product.id == item.product_id).first()
         
-        # BUG FIX: Ensure N/A fallback is applied if the Database returns NULL!
         hsn = getattr(product, 'hsn_code', 'N/A') or 'N/A'
         unit = getattr(product, 'uom', 'PCS') or 'PCS'
         mkt = getattr(product, 'brand', 'N/A') or 'N/A'
@@ -124,7 +123,10 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
             f"{item.line_total:.2f}"    
         ])
 
-    # 4. FOOTER TOTALS
+    # 4. FOOTER TOTALS (Using Dynamic Indexing to prevent cell merging bugs)
+    # Track exactly what row number the footers start on
+    footer_start_row = len(table_data)
+    
     table_data.append(["", "", "", "", "", "", "", "", "", "", "", "", "SUBTOTAL:", "", "", f"${invoice.subtotal:.2f}"])
     
     if getattr(invoice, 'round_off', 0.0) != 0.0:
@@ -133,9 +135,14 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
         
     table_data.append(["", "", "", "", "", "", "", "", "", "", "", "", "GRAND TOTAL:", "", "", f"${invoice.grand_total:.2f}"])
 
+    # Build an exact list of which rows represent the footers
+    footer_end_row = len(table_data) - 1
+
     col_widths = [20, 110, 40, 30, 30, 40, 40, 45, 40, 40, 40, 45, 50, 40, 40, 50]
     t = Table(table_data, colWidths=col_widths)
-    t.setStyle(TableStyle([
+    
+    # Base Style
+    base_style = [
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#2C3E50")),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'), 
@@ -145,13 +152,17 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
         ('FONTSIZE', (0, 0), (-1, -1), 7),     
         ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
-        ('GRID', (0, 0), (-1, -4), 0.5, colors.lightgrey), 
-        ('SPAN', (12, -3), (14, -3)), 
-        ('SPAN', (12, -2), (14, -2)), 
-        ('SPAN', (12, -1), (14, -1)), 
-        ('FONTNAME', (12, -3), (-1, -1), 'Helvetica-Bold'),
-        ('LINEABOVE', (12, -3), (-1, -1), 1, colors.black),
-    ]))
+        # Grid stops strictly before the footers
+        ('GRID', (0, 0), (-1, footer_start_row - 1), 0.5, colors.lightgrey), 
+        ('FONTNAME', (12, footer_start_row), (-1, footer_end_row), 'Helvetica-Bold'),
+        ('LINEABOVE', (12, footer_start_row), (-1, footer_end_row), 1, colors.black),
+    ]
+
+    # Dynamically apply the spans ONLY to the actual footer rows
+    for row_idx in range(footer_start_row, footer_end_row + 1):
+        base_style.append(('SPAN', (12, row_idx), (14, row_idx)))
+
+    t.setStyle(TableStyle(base_style))
     elements.append(t)
     elements.append(Spacer(1, 20))
 
