@@ -3,11 +3,13 @@ from pydantic import BaseModel
 from typing import List, Optional
 from enum import Enum
 
+# 🐛 BUG FIX: Perfectly align this Enum with src/models/order.py
 class OrderStatusSchema(str, Enum):
-    PENDING = "PENDING"
-    PROCESSING = "PROCESSING" # WMS is routing the picker
-    PICKED = "PICKED"         # Sitting at the Packing Station
-    PACKED = "PACKED"         # Verified, boxed, waiting for dispatch
+    PENDING = "PENDING"           # 1. Order Placed
+    IN_PROCESS = "IN_PROCESS"     # 2. Wave Generated
+    CHECKING = "CHECKING"         # 3. Pick Scanned/Completed
+    PACKING = "PACKING"           # 4. Checked & Bill Printed
+    PACKED = "PACKED"             # 5. Box taped and labeled
     SHIPPED = "SHIPPED"
     CANCELLED = "CANCELLED"
     BACKORDERED = "BACKORDERED"
@@ -26,8 +28,8 @@ class OrderItemResponse(BaseModel):
     id: int
     product_id: int
     qty_ordered: float
-    qty_allocated: float   # <--- NEW
-    qty_backordered: float # <--- NEW
+    qty_allocated: float
+    qty_backordered: float
     model_config = {"from_attributes": True}
 
 class OrderResponse(BaseModel):

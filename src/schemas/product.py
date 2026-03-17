@@ -20,14 +20,15 @@ class ProductBase(BaseModel):
     unit_type: str
     requires_batch_tracking: bool = False
     
-    # 🐛 BUG FIX: Default to None instead of a string to prevent text-replacement corruption
     hsn_code: Optional[str] = None
     brand: Optional[str] = None
     
     mrp: float
-    # As you noted, the billing engine successfully reads this discount_percent!
-    discount_percent: float = 0.0
     
+    # --- NEW: Now required from the user during creation ---
+    base_price: float 
+    
+    discount_percent: float = 0.0
     cgst_percent: float = 0.0
     sgst_percent: float = 0.0
     
@@ -43,7 +44,7 @@ class ProductCreate(ProductBase):
 
 class ProductResponse(ProductBase):
     id: int
-    base_price: float
+    # Removed base_price from here since it is now inherited from ProductBase
     components: Optional[List[KitComponentResponse]] = []
     
     model_config = {"from_attributes": True}

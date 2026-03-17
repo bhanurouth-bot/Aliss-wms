@@ -23,13 +23,9 @@ def create_product(
     if existing:
         raise HTTPException(status_code=400, detail="SKU or Barcode already exists.")
         
-    # --- UPDATED: TAX MATH (CGST + SGST) ---
-    total_tax_percent = product_in.cgst_percent + product_in.sgst_percent
-    calculated_base_price = product_in.mrp / (1 + (total_tax_percent / 100.0))
-    
-    # Exclude components from the initial dictionary dump
+    # --- AUTO-CALCULATION REMOVED ---
+    # We now trust the base_price passed in the JSON payload
     product_data = product_in.model_dump(exclude={"components"})
-    product_data["base_price"] = round(calculated_base_price, 2)
     
     db_product = Product(**product_data)
     db.add(db_product)

@@ -49,50 +49,44 @@ def generate_invoice(
     aggregated_qty = {}
     for item in order.items:
         if item.qty_allocated > 0:
+            # We also group by batch/expiry if your system tracks them at the order level
             aggregated_qty[item.product_id] = aggregated_qty.get(item.product_id, 0.0) + item.qty_allocated
 
-    # FRESH, BULLETPROOF MATH LOGIC
+    # STRICT FORWARD MATH (Base Price -> Discount -> Taxes -> Total)
     for product_id, qty in aggregated_qty.items():
         product = db.query(Product).filter(Product.id == product_id).first()
         
-        # Taxes
-        cgst_pct = product.cgst_percent or 0.0
-        sgst_pct = product.sgst_percent or 0.0
-        total_tax_pct = cgst_pct + sgst_pct
-        
-        # Prices
+        # 1. Fetch fixed values
         base_rate = product.base_price or 0.0
         mrp = product.mrp or 0.0
+        
+        cgst_pct = product.cgst_percent or 0.0
+        sgst_pct = product.sgst_percent or 0.0
+        
+        # 2. Determine Discount
         sale_discount_pct = getattr(product, 'discount_percent', 0.0) or 0.0
-
+        
         if order.order_type == CustomerType.B2B:
             total_discount_pct = B2B_DISCOUNT_PCT + sale_discount_pct
-            
-            net_rate = base_rate * (1 - (total_discount_pct / 100.0))
-            taxable_value = net_rate * qty
-            
-            cgst_amt = taxable_value * (cgst_pct / 100.0)
-            sgst_amt = taxable_value * (sgst_pct / 100.0)
-            line_tax = cgst_amt + sgst_amt
-            
-            line_total = taxable_value + line_tax
-            line_discount_amt = (base_rate - net_rate) * qty
-            
         else:
             total_discount_pct = sale_discount_pct
             
-            discounted_mrp = mrp * (1 - (total_discount_pct / 100.0))
-            line_total = discounted_mrp * qty
-            
-            taxable_value = line_total / (1 + (total_tax_pct / 100.0))
-            
-            cgst_amt = taxable_value * (cgst_pct / 100.0)
-            sgst_amt = taxable_value * (sgst_pct / 100.0)
-            line_tax = cgst_amt + sgst_amt
-            
-            net_rate = taxable_value / qty if qty > 0 else 0.0
-            line_discount_amt = (base_rate - net_rate) * qty
+        # 3. Calculate Net Rate (Discount applied to Base Price)
+        net_rate = base_rate * (1 - (total_discount_pct / 100.0))
+        
+        # 4. Calculate Taxable Value
+        taxable_value = net_rate * qty
+        line_discount_amt = (base_rate - net_rate) * qty
+        
+        # 5. Add Taxes ON TOP of the Taxable Value
+        cgst_amt = taxable_value * (cgst_pct / 100.0)
+        sgst_amt = taxable_value * (sgst_pct / 100.0)
+        line_tax = cgst_amt + sgst_amt
+        
+        # 6. Final Amount Payable for this line
+        line_total = taxable_value + line_tax
 
+        # Add to Invoice Running Totals
         subtotal += taxable_value
         tax_total += line_tax
         discount_total += line_discount_amt
@@ -108,6 +102,9 @@ def generate_invoice(
             sgst_amount=round(sgst_amt, 2),              
             tax_amount=round(line_tax, 2),
             line_total=round(line_total, 2)
+            # If your InvoiceItem model has batch/exp columns, you'd map them here:
+            # batch_number=getattr(item, 'batch_number', None),
+            # exp_date=getattr(item, 'exp_date', None)
         )
         db.add(db_item)
 
@@ -127,7 +124,8 @@ def generate_invoice(
     db.commit()
     db.refresh(db_invoice)
     return db_invoice
-
+    
+    
 @router.get("/invoice/{invoice_id}/pdf")
 def download_invoice_pdf(
     invoice_id: int,

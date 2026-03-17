@@ -88,6 +88,8 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
         "MRP", "Rate", "Disc %", "Net Rate", "Taxable", "CGST", "SGST", "Amount"
     ]]
     
+    # 3. STRICT 16-COLUMN GRID
+    
     for idx, item in enumerate(invoice.items, start=1):
         product = db.query(Product).filter(Product.id == item.product_id).first()
         
@@ -95,14 +97,29 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
         unit = getattr(product, 'uom', 'PCS') or 'PCS'
         mkt = getattr(product, 'brand', 'N/A') or 'N/A'
         
-        mrp = getattr(product, 'mrp', 0.0)
-        base_rate = getattr(product, 'base_price', 0.0)
+        # MRP is just for show now
+        mrp = getattr(product, 'mrp', 0.0) or 0.0
         
-        disc_pct = getattr(product, 'discount_percent', 0.0)
+        # Rate is strictly the DB Base Price
+        base_rate = getattr(product, 'base_price', 0.0) or 0.0
+        
+        disc_pct = getattr(product, 'discount_percent', 0.0) or 0.0
         if is_b2b:
             disc_pct += 20.0 
             
         taxable_val = item.unit_price * item.qty
+        
+        # --- NEW: Fetch Batch and Expiry (Fallback to N/A) ---
+        # Make sure these match the actual column names in your InvoiceItem or OrderItem model!
+        batch_val = getattr(item, 'batch_number', 'N/A') or 'N/A'
+        
+        exp_val = getattr(item, 'exp_date', 'N/A')
+        if exp_val and exp_val != 'N/A':
+            # Format the date nicely if it's a datetime object
+            if hasattr(exp_val, 'strftime'):
+                exp_val = exp_val.strftime('%Y-%m-%d')
+        else:
+            exp_val = 'N/A'
         
         table_data.append([
             str(idx),
@@ -110,11 +127,11 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
             str(hsn),
             str(item.qty),
             str(unit),
-            "N/A", # Batch
+            str(batch_val),             # <--- Dynamic Batch
             str(mkt),
-            "N/A", # Exp Dt
+            str(exp_val),               # <--- Dynamic Expiry Date
             f"{mrp:.2f}",               
-            f"{base_rate:.2f}",         
+            f"{base_rate:.2f}",         # <--- Pulls pure DB Base Price         
             f"{disc_pct:.2f}%",         
             f"{item.unit_price:.2f}",   
             f"{taxable_val:.2f}",       
@@ -128,6 +145,8 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
     footer_start_row = len(table_data)
     
     table_data.append(["", "", "", "", "", "", "", "", "", "", "", "", "SUBTOTAL:", "", "", f"${invoice.subtotal:.2f}"])
+    
+    table_data.append(["", "", "", "", "", "", "", "", "", "", "", "", "TOTAL TAX:", "", "", f"${invoice.tax_total:.2f}"])
     
     if getattr(invoice, 'round_off', 0.0) != 0.0:
         sign = "+" if invoice.round_off > 0 else ""

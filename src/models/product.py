@@ -17,10 +17,10 @@ class Product(Base):
     hsn_code = Column(String, nullable=True)
     brand = Column(String, nullable=True)
     
-    # Pricing & Taxes
+# Pricing & Taxes
     mrp = Column(Float)
-    base_price = Column(Float) # Auto-calculated: MRP - Taxes
-    discount_percent = Column(Float, default=0.0) # e.g., 15.0 for a 15% off sale
+    base_price = Column(Float) # <-- Change comment to: Manually entered tax-exclusive rate
+    discount_percent = Column(Float, default=0.0)
     
     # --- REPLACED: gst_percent split into CGST and SGST ---
     cgst_percent = Column(Float, default=0.0) 
