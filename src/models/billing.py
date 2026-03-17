@@ -7,9 +7,17 @@ from src.core.database import Base
 
 class InvoiceStatus(enum.Enum):
     DRAFT = "DRAFT"
-    UNPAID = "UNPAID" # Typical for B2B Net-30 terms
-    PAID = "PAID"     # Typical for B2C instant checkout
+    UNPAID = "UNPAID" 
+    PARTIAL = "PARTIAL" # <--- NEW: For when they only pay half
+    PAID = "PAID"     
     VOID = "VOID"
+
+class PaymentMethod(enum.Enum):
+    CASH = "CASH"
+    CREDIT_CARD = "CREDIT_CARD"
+    WIRE_TRANSFER = "WIRE_TRANSFER"
+    CHECK = "CHECK"
+    ONLINE = "ONLINE" # Stripe/Razorpay etc.
 
 class Invoice(Base):
     """The Financial Ledger for an Order."""
@@ -22,15 +30,18 @@ class Invoice(Base):
     subtotal = Column(Float, default=0.0)
     tax_total = Column(Float, default=0.0)
     discount_total = Column(Float, default=0.0)
-    # --- NEW: ROUND OFF COLUMN ---
     round_off = Column(Float, default=0.0) 
     grand_total = Column(Float, default=0.0)
+    
+    # --- NEW: Payment Tracking ---
+    amount_paid = Column(Float, default=0.0)
     
     status = Column(SQLEnum(InvoiceStatus), default=InvoiceStatus.UNPAID)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     due_date = Column(DateTime(timezone=True), nullable=True)
     
     items = relationship("InvoiceItem", back_populates="invoice", cascade="all, delete-orphan")
+    payments = relationship("Payment", back_populates="invoice", cascade="all, delete-orphan")
     order = relationship("Order")
 
 class InvoiceItem(Base):
@@ -42,12 +53,25 @@ class InvoiceItem(Base):
     qty = Column(Float)
     unit_price = Column(Float) 
     
-    # --- NEW: EXPLICIT LEDGER COLUMNS ---
     discount_amount = Column(Float, default=0.0)
     cgst_amount = Column(Float, default=0.0)
     sgst_amount = Column(Float, default=0.0)
     
-    tax_amount = Column(Float) # Keep this as the Total Tax (CGST + SGST)
+    tax_amount = Column(Float)
     line_total = Column(Float)
     
     invoice = relationship("Invoice", back_populates="items")
+
+# --- NEW: The Payment Receipt Ledger ---
+class Payment(Base):
+    __tablename__ = 'payments'
+    id = Column(Integer, primary_key=True, index=True)
+    invoice_id = Column(Integer, ForeignKey('invoices.id'))
+    amount = Column(Float, nullable=False)
+    
+    payment_method = Column(SQLEnum(PaymentMethod), default=PaymentMethod.WIRE_TRANSFER)
+    reference_number = Column(String, nullable=True) # Transaction ID, Check Number, etc.
+    
+    payment_date = Column(DateTime(timezone=True), server_default=func.now())
+    
+    invoice = relationship("Invoice", back_populates="payments")

@@ -11,6 +11,8 @@ from src.models.product import Product
 from src.models.billing import Invoice, InvoiceItem, InvoiceStatus
 from src.schemas import billing as schemas
 from src.services.pdf_svc import generate_invoice_pdf
+from src.models.billing import Payment
+
 
 router = APIRouter(prefix="/billing", tags=["Financials & Invoicing"])
 
@@ -125,7 +127,7 @@ def generate_invoice(
     db.refresh(db_invoice)
     return db_invoice
     
-    
+
 @router.get("/invoice/{invoice_id}/pdf")
 def download_invoice_pdf(
     invoice_id: int,
@@ -135,3 +137,52 @@ def download_invoice_pdf(
     pdf_buffer, invoice_number = generate_invoice_pdf(db, invoice_id)
     headers = {"Content-Disposition": f"attachment; filename={invoice_number}.pdf"}
     return StreamingResponse(pdf_buffer, media_type="application/pdf", headers=headers)
+
+# --- NEW: Payment Endpoint ---
+@router.post("/invoice/{invoice_id}/pay", response_model=schemas.PaymentResponse)
+def record_payment(
+    invoice_id: int,
+    payment_in: schemas.PaymentCreate,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["Admin", "Finance"]))
+):
+    """Logs a payment against an invoice and updates its paid status."""
+    invoice = db.query(Invoice).filter(Invoice.id == invoice_id).first()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+        
+    if invoice.status == InvoiceStatus.PAID:
+        raise HTTPException(status_code=400, detail="This invoice is already fully paid.")
+
+    # Calculate remaining balance
+    balance = round(invoice.grand_total - invoice.amount_paid, 2)
+    
+    if payment_in.amount <= 0:
+        raise HTTPException(status_code=400, detail="Payment amount must be greater than zero.")
+        
+    # Prevent overpayment (allowing a 1 cent float tolerance just in case)
+    if payment_in.amount > balance + 0.01:
+        raise HTTPException(status_code=400, detail=f"Payment amount (${payment_in.amount}) exceeds the balance due (${balance}).")
+
+    # 1. Log the receipt in the Payment Ledger
+    db_payment = Payment(
+        invoice_id=invoice.id,
+        amount=payment_in.amount,
+        payment_method=payment_in.payment_method.value,
+        reference_number=payment_in.reference_number
+    )
+    db.add(db_payment)
+    
+    # 2. Update the Invoice Totals
+    invoice.amount_paid += payment_in.amount
+    
+    # 3. Dynamically update status
+    if round(invoice.amount_paid, 2) >= round(invoice.grand_total, 2):
+        invoice.status = InvoiceStatus.PAID
+    else:
+        invoice.status = InvoiceStatus.PARTIAL
+        
+    db.commit()
+    db.refresh(db_payment)
+    
+    return db_payment
