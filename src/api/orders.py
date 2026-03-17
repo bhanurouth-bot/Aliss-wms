@@ -7,6 +7,7 @@ from src.services.order_svc import create_order_with_fefo_reservation
 from src.models.order import Order
 from src.services.order_svc import allocate_backordered_order
 from fastapi import HTTPException
+from src.models.customer import Customer
 
 
 router = APIRouter(prefix="/orders", tags=["Sales Orders"])

@@ -20,6 +20,13 @@ class OrderItemCreate(BaseModel):
 
 class OrderCreate(BaseModel):
     customer_name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    billing_address: Optional[str] = None
+    shipping_address: Optional[str] = None
+    company_name: Optional[str] = None
+    tax_id: Optional[str] = None
+    
     order_type: str = "B2C" # "B2B" or "B2C"
     route: Optional[str] = None
     items: List[OrderItemCreate]

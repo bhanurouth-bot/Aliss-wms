@@ -7,17 +7,54 @@ from src.models.inventory import Inventory, ProductBatch, QCStatus
 from src.models.order import Order, OrderItem, OrderStatus, CustomerType
 from src.schemas.order import OrderCreate
 from src.models.product import Product
+from src.models.customer import Customer
 
 # --- IMPORT THESE NEW MODELS ---
 from src.models.wms_ops import PickTask, TaskStatus
 
 def create_order_with_fefo_reservation(db: Session, order_in: OrderCreate, allow_backorder: bool = False):
-    """Creates an order, explodes Kits into components, and secures physical inventory via FEFO."""
+    """Creates an order, links/creates the CRM Customer, explodes Kits, and secures physical inventory."""
     
     is_single_sku = len(order_in.items) == 1
 
+    # ==========================================
+    # 1. SMART CUSTOMER LOOKUP / CREATION (CRM)
+    # ==========================================
+    db_customer = None
+    
+    # Try to find existing customer by Email or Phone
+    if getattr(order_in, 'email', None):
+        db_customer = db.query(Customer).filter(Customer.email == order_in.email).first()
+    if not db_customer and getattr(order_in, 'phone', None):
+        db_customer = db.query(Customer).filter(Customer.phone == order_in.phone).first()
+        
+    # If they don't exist, create a new Customer profile automatically!
+    if not db_customer:
+        db_customer = Customer(
+            name=order_in.customer_name,
+            email=getattr(order_in, 'email', None),
+            phone=getattr(order_in, 'phone', None),
+            customer_type=order_in.order_type,
+            company_name=getattr(order_in, 'company_name', None),
+            tax_id=getattr(order_in, 'tax_id', None),
+            billing_address=getattr(order_in, 'billing_address', None),
+            shipping_address=getattr(order_in, 'shipping_address', None)
+        )
+        db.add(db_customer)
+        db.flush() # Save to get the customer.id immediately
+
+    # ==========================================
+    # 2. CREATE THE ORDER (Linked to CRM)
+    # ==========================================
     db_order = Order(
+        customer_id=db_customer.id, # <--- Link it to the CRM here!
         customer_name=order_in.customer_name,
+        email=getattr(order_in, 'email', None),
+        phone=getattr(order_in, 'phone', None),
+        billing_address=getattr(order_in, 'billing_address', None),
+        shipping_address=getattr(order_in, 'shipping_address', None),
+        company_name=getattr(order_in, 'company_name', None),
+        tax_id=getattr(order_in, 'tax_id', None),
         order_type=CustomerType(order_in.order_type),
         route=order_in.route,
         is_single_sku=is_single_sku
@@ -80,7 +117,6 @@ def create_order_with_fefo_reservation(db: Session, order_in: OrderCreate, allow
                 remaining_qty_to_reserve -= qty_to_take
                 
                 # --- REAL LOGIC: CREATE THE INITIAL PICK TASK ---
-                # We MUST save which bin we reserved this from so the Wave Generator knows!
                 initial_task = PickTask(
                     order_id=db_order.id,
                     product_id=comp_req["product_id"],

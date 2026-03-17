@@ -14,7 +14,7 @@ from src.models.order import Order, CustomerType
 from src.models.product import Product
 from src.models.wms_ops import PickingWave
 from src.models.wms import Bin
-
+from src.models.customer import Customer
 
 # ==========================================
 # MODULAR COMPANY CONFIGURATION
@@ -25,7 +25,7 @@ COMPANY_CONFIG = {
     "address": "123 Warehouse Row\nSuite 400\nLogistics City, NY 10001",
     "phone": "+1 (800) 555-0199",
     "email": "billing@petproductserp.com",
-    "tax_id": "EIN-99-88776655", # Your Corporate Tax ID/VAT
+    "gst_no": "22AAAAA0000A1Z5", # <--- NEW: Changed to GST No.
     
     # B2B Specifics
     "b2b_remittance": "Please remit payment via Wire Transfer.\nBank: Chase Business\nRouting: 111222333 | Acct: 999888777",
@@ -58,22 +58,36 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
     center_style = ParagraphStyle('CenterStyle', parent=styles['Normal'], alignment=1)
     tiny_style = ParagraphStyle('Tiny', parent=styles['Normal'], fontSize=7, leading=8)
 
-    # 1. HEADER
+    # --- NEW: Fetch CRM Customer Data ---
+    customer = None
+    if getattr(order, 'customer_id', None):
+        customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
+
+    # 1. HEADER (Now uses GST No.)
     doc_title = "TAX INVOICE" if is_b2b else "RETAIL INVOICE"
     header_data = [
         [
-            Paragraph(f"<b>{COMPANY_CONFIG['name']}</b><br/>{COMPANY_CONFIG['address'].replace(chr(10), '<br/>')}<br/>Tax ID: {COMPANY_CONFIG['tax_id']}<br/>{COMPANY_CONFIG['email']}", normal_style),
+            Paragraph(f"<b>{COMPANY_CONFIG['name']}</b><br/>{COMPANY_CONFIG['address'].replace(chr(10), '<br/>')}<br/>GST No.: {COMPANY_CONFIG['gst_no']}<br/>{COMPANY_CONFIG['email']}", normal_style),
             Paragraph(f"<b>{doc_title}</b>", title_style)
         ]
     ]
     elements.append(Table(header_data, colWidths=[400, 330]))
     elements.append(Spacer(1, 15))
 
-    # 2. META DATA
+    # 2. META DATA (Now includes Customer CRM Info & GST No.)
+    contact_phone = getattr(order, 'phone', None) or (customer.phone if customer else "")
+    contact_email = getattr(order, 'email', None) or (customer.email if customer else "")
+    
+    # Format a clean contact string if they exist
+    contact_str = ""
+    if contact_phone or contact_email:
+        contact_parts = [p for p in [contact_phone, contact_email] if p]
+        contact_str = f"<br/>{' | '.join(contact_parts)}"
+
     if is_b2b:
-        buyer_info = f"<b>BILL TO:</b><br/>{order.company_name or order.customer_name}<br/>Tax ID: {order.tax_id or 'N/A'}<br/>{str(order.billing_address).replace(chr(10), '<br/>')}"
+        buyer_info = f"<b>BILL TO:</b><br/>{order.company_name or order.customer_name}{contact_str}<br/>GST No.: {order.tax_id or 'N/A'}<br/>{str(order.billing_address or 'No Address Provided').replace(chr(10), '<br/>')}"
     else:
-        buyer_info = f"<b>CUSTOMER:</b><br/>{order.customer_name}<br/><b>Ship To:</b><br/>{str(order.shipping_address).replace(chr(10), '<br/>')}"
+        buyer_info = f"<b>CUSTOMER:</b><br/>{order.customer_name}{contact_str}<br/><br/><b>Ship To:</b><br/>{str(order.shipping_address or 'None').replace(chr(10), '<br/>')}"
     
     meta_info = f"<b>Invoice Number:</b> {invoice.invoice_number}<br/><b>Date:</b> {invoice.created_at.strftime('%Y-%m-%d')}<br/>"
     if is_b2b:
@@ -88,8 +102,6 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
         "MRP", "Rate", "Disc %", "Net Rate", "Taxable", "CGST", "SGST", "Amount"
     ]]
     
-    # 3. STRICT 16-COLUMN GRID
-    
     for idx, item in enumerate(invoice.items, start=1):
         product = db.query(Product).filter(Product.id == item.product_id).first()
         
@@ -97,10 +109,7 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
         unit = getattr(product, 'uom', 'PCS') or 'PCS'
         mkt = getattr(product, 'brand', 'N/A') or 'N/A'
         
-        # MRP is just for show now
         mrp = getattr(product, 'mrp', 0.0) or 0.0
-        
-        # Rate is strictly the DB Base Price
         base_rate = getattr(product, 'base_price', 0.0) or 0.0
         
         disc_pct = getattr(product, 'discount_percent', 0.0) or 0.0
@@ -109,13 +118,10 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
             
         taxable_val = item.unit_price * item.qty
         
-        # --- NEW: Fetch Batch and Expiry (Fallback to N/A) ---
-        # Make sure these match the actual column names in your InvoiceItem or OrderItem model!
         batch_val = getattr(item, 'batch_number', 'N/A') or 'N/A'
         
         exp_val = getattr(item, 'exp_date', 'N/A')
         if exp_val and exp_val != 'N/A':
-            # Format the date nicely if it's a datetime object
             if hasattr(exp_val, 'strftime'):
                 exp_val = exp_val.strftime('%Y-%m-%d')
         else:
@@ -127,11 +133,11 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
             str(hsn),
             str(item.qty),
             str(unit),
-            str(batch_val),             # <--- Dynamic Batch
+            str(batch_val),             
             str(mkt),
-            str(exp_val),               # <--- Dynamic Expiry Date
+            str(exp_val),               
             f"{mrp:.2f}",               
-            f"{base_rate:.2f}",         # <--- Pulls pure DB Base Price         
+            f"{base_rate:.2f}",                 
             f"{disc_pct:.2f}%",         
             f"{item.unit_price:.2f}",   
             f"{taxable_val:.2f}",       
@@ -140,12 +146,12 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
             f"{item.line_total:.2f}"    
         ])
 
-    # 4. FOOTER TOTALS (Using Dynamic Indexing to prevent cell merging bugs)
-    # Track exactly what row number the footers start on
+    # 4. FOOTER TOTALS
     footer_start_row = len(table_data)
     
     table_data.append(["", "", "", "", "", "", "", "", "", "", "", "", "SUBTOTAL:", "", "", f"${invoice.subtotal:.2f}"])
     
+    # --- NEW: Added the Total Tax Row back in! ---
     table_data.append(["", "", "", "", "", "", "", "", "", "", "", "", "TOTAL TAX:", "", "", f"${invoice.tax_total:.2f}"])
     
     if getattr(invoice, 'round_off', 0.0) != 0.0:
@@ -154,13 +160,11 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
         
     table_data.append(["", "", "", "", "", "", "", "", "", "", "", "", "GRAND TOTAL:", "", "", f"${invoice.grand_total:.2f}"])
 
-    # Build an exact list of which rows represent the footers
     footer_end_row = len(table_data) - 1
 
     col_widths = [20, 110, 40, 30, 30, 40, 40, 45, 40, 40, 40, 45, 50, 40, 40, 50]
     t = Table(table_data, colWidths=col_widths)
     
-    # Base Style
     base_style = [
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#2C3E50")),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
@@ -171,13 +175,11 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
         ('FONTSIZE', (0, 0), (-1, -1), 7),     
         ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
-        # Grid stops strictly before the footers
         ('GRID', (0, 0), (-1, footer_start_row - 1), 0.5, colors.lightgrey), 
         ('FONTNAME', (12, footer_start_row), (-1, footer_end_row), 'Helvetica-Bold'),
         ('LINEABOVE', (12, footer_start_row), (-1, footer_end_row), 1, colors.black),
     ]
 
-    # Dynamically apply the spans ONLY to the actual footer rows
     for row_idx in range(footer_start_row, footer_end_row + 1):
         base_style.append(('SPAN', (12, row_idx), (14, row_idx)))
 

@@ -21,6 +21,8 @@ class CustomerType(enum.Enum):
 class Order(Base):
     __tablename__ = 'orders'
     id = Column(Integer, primary_key=True, index=True)
+    customer_id = Column(Integer, ForeignKey('customers.id'), nullable=True)
+    customer = relationship("Customer", back_populates="orders")
     customer_name = Column(String, index=True)
     status = Column(SQLEnum(OrderStatus), default=OrderStatus.PENDING)
     
