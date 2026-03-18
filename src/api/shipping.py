@@ -79,11 +79,13 @@ def dispatch_order(
 @router.get("/label/{order_id}/pdf")
 def download_shipping_label_pdf(
     order_id: int,
+    carrier: str = "FEDEX",  # <--- NEW: Accepts a query parameter, defaults to FEDEX
     db: Session = Depends(get_db),
     current_user = Depends(require_role(["Admin", "Warehouse Manager", "Dock Worker"]))
 ):
     """Generates a 4x6 printable thermal shipping label."""
-    pdf_buffer, tracking_number = generate_shipping_label_pdf(db, order_id)
+    # Pass the chosen carrier into the generator
+    pdf_buffer, tracking_number = generate_shipping_label_pdf(db, order_id, carrier)
     
     headers = {
         "Content-Disposition": f"attachment; filename=LABEL-{tracking_number}.pdf"

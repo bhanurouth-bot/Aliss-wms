@@ -329,7 +329,7 @@ def generate_picklist_pdf(picklist_data: dict) -> io.BytesIO:
     return buffer
 
 
-def generate_shipping_label_pdf(db: Session, order_id: int) -> tuple[io.BytesIO, str]:
+def generate_shipping_label_pdf(db: Session, order_id: int, requested_carrier: str = "FEDEX") -> tuple[io.BytesIO, str]:
     """Generates a 4x6 inch thermal shipping label with a tracking barcode and Route ID."""
     
     order = db.query(Order).filter(Order.id == order_id).first()
@@ -343,8 +343,11 @@ def generate_shipping_label_pdf(db: Session, order_id: int) -> tuple[io.BytesIO,
         tracking_number = manifest.tracking_number
         carrier = manifest.carrier.upper()
     else:
-        tracking_number = f"FDX-{order.id:010d}"
-        carrier = "FEDEX" 
+        # Dynamically set the carrier and mock tracking prefix!
+        carrier = requested_carrier.upper()
+        # Grab the first 3 letters for the mock tracking prefix (e.g., UPS, DHL, USP)
+        prefix = carrier[:3].upper() if len(carrier) >= 3 else "TRK"
+        tracking_number = f"{prefix}-{order.id:010d}"
     # ---------------------------------------------
 
     buffer = io.BytesIO()
@@ -362,7 +365,6 @@ def generate_shipping_label_pdf(db: Session, order_id: int) -> tuple[io.BytesIO,
     # ==========================================
     # 1. CARRIER & ORDER TYPE HEADER (30% Split)
     # ==========================================
-    # Added 'leading' to prevent vertical squishing, and adjusted font sizes to prevent word-wrap!
     carrier_style = ParagraphStyle(
         'CarrierStyle', parent=styles['Heading1'], alignment=0, fontSize=16, leading=20
     )
@@ -370,46 +372,56 @@ def generate_shipping_label_pdf(db: Session, order_id: int) -> tuple[io.BytesIO,
         'TypeStyle', parent=styles['Heading1'], alignment=0, fontSize=24, leading=28
     )
     
+    # Extract B2B/B2C safely
     order_type_str = order.order_type.value if hasattr(order.order_type, 'value') else str(order.order_type)
     
+    # Append Route if it exists
     if getattr(order, 'route', None):
         display_text = f"{order_type_str} - {order.route.upper()}"
     else:
         display_text = order_type_str
     
-    # Widened the left column slightly (85 points) to guarantee "FEDEX" or "USPS" never word-wraps
+    # Create the 2-column header layout
     header_table = Table([
         [Paragraph(f"<b>{carrier}</b>", carrier_style), Paragraph(f"<b>{display_text}</b>", type_style)]
     ], colWidths=[85, 173])
     
     header_table.setStyle(TableStyle([
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 5), # Added padding so it doesn't touch the line below
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
         ('TOPPADDING', (0, 0), (-1, -1), 0),
     ]))
     
     elements.append(header_table)
     elements.append(Spacer(1, 15))
     
+    # ==========================================
     # 2. RETURN ADDRESS 
+    # ==========================================
     sender_text = f"<b>FROM:</b><br/>{COMPANY_CONFIG['name']}<br/>{COMPANY_CONFIG['address'].replace(chr(10), '<br/>')}<br/>{COMPANY_CONFIG['phone']}"
     elements.append(Paragraph(sender_text, sender_style))
     elements.append(Spacer(1, 20))
     
+    # ==========================================
     # 3. SHIP TO ADDRESS
+    # ==========================================
     contact_str = f"<br/>{order.phone}" if order.phone else ""
     ship_to_text = f"<b>SHIP TO:</b><br/>{order.customer_name}{contact_str}<br/>{str(order.shipping_address or 'No Address Provided').replace(chr(10), '<br/>')}"
     elements.append(Paragraph(ship_to_text, recipient_style))
     elements.append(Spacer(1, 30))
     
+    # ==========================================
     # 4. TRACKING BARCODE
+    # ==========================================
     barcode = createBarcodeDrawing('Code128', value=tracking_number, barHeight=0.8*inch, barWidth=1.2)
     barcode.hAlign = 'CENTER' 
     
     elements.append(barcode)
     elements.append(Spacer(1, 5))
     
+    # ==========================================
     # 5. TRACKING NUMBER TEXT
+    # ==========================================
     tracking_text = ParagraphStyle('TrackTxt', parent=styles['Normal'], alignment=1, fontSize=10)
     elements.append(Paragraph(f"<b>TRK# {tracking_number}</b>", tracking_text))
     
