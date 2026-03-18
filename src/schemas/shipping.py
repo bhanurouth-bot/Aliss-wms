@@ -21,3 +21,9 @@ class ShippingManifestResponse(BaseModel):
     dispatched_at: datetime
     
     model_config = {"from_attributes": True}
+
+class ScanToShipRequest(BaseModel):
+    order_id_barcode: str     # Scanned from the packing slip
+    tracking_barcode: str     # Scanned from the FedEx sticker
+    carrier: str = "FedEx"    # Selected on the scanner gun
+    actual_weight_kg: float = 0.0

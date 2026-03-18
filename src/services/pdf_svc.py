@@ -2,31 +2,34 @@
 import io
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
-from reportlab.lib.pagesizes import letter
+from reportlab.lib.pagesizes import letter, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import letter, landscape
 
+# --- NEW: ReportLab Barcode & Unit Imports for Shipping Labels ---
+from reportlab.lib.units import inch
+from reportlab.graphics.barcode import createBarcodeDrawing
+from reportlab.graphics.shapes import Drawing
 
 from src.models.billing import Invoice
 from src.models.order import Order, CustomerType
 from src.models.product import Product
-from src.models.wms_ops import PickingWave
+from src.models.wms_ops import PickingWave, PickTask
 from src.models.wms import Bin
-from src.models.customer import Customer
-from src.models.wms_ops import PickTask
 from src.models.inventory import ProductBatch
+from src.models.customer import Customer
+from src.models.shipping import ShippingManifest
+
 # ==========================================
 # MODULAR COMPANY CONFIGURATION
-# Edit these details as your business changes
 # ==========================================
 COMPANY_CONFIG = {
     "name": "Aliss ERP and WMS Services",
     "address": "123 Warehouse Row\nSuite 400\nLogistics City, NY 10001",
     "phone": "+1 (800) 555-0199",
     "email": "billing@petproductserp.com",
-    "gst_no": "22AAAAA0000A1Z5", # <--- NEW: Changed to GST No.
+    "gst_no": "22AAAAA0000A1Z5", # <--- Updated to GST No.
     
     # B2B Specifics
     "b2b_remittance": "Please remit payment via Wire Transfer.\nBank: Chase Business\nRouting: 111222333 | Acct: 999888777",
@@ -48,6 +51,7 @@ def generate_invoice_pdf(db: Session, invoice_id: int):
         
     return buffer, invoice.invoice_number
 
+
 def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: bool) -> io.BytesIO:
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=landscape(letter), rightMargin=20, leftMargin=20, topMargin=30, bottomMargin=30)
@@ -59,12 +63,12 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
     center_style = ParagraphStyle('CenterStyle', parent=styles['Normal'], alignment=1)
     tiny_style = ParagraphStyle('Tiny', parent=styles['Normal'], fontSize=7, leading=8)
 
-    # --- NEW: Fetch CRM Customer Data ---
+    # --- Fetch CRM Customer Data ---
     customer = None
     if getattr(order, 'customer_id', None):
         customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
 
-    # 1. HEADER (Now uses GST No.)
+    # 1. HEADER (Using GST No.)
     doc_title = "TAX INVOICE" if is_b2b else "RETAIL INVOICE"
     header_data = [
         [
@@ -75,11 +79,10 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
     elements.append(Table(header_data, colWidths=[400, 330]))
     elements.append(Spacer(1, 15))
 
-    # 2. META DATA (Now includes Customer CRM Info & GST No.)
+    # 2. META DATA (Includes CRM Info)
     contact_phone = getattr(order, 'phone', None) or (customer.phone if customer else "")
     contact_email = getattr(order, 'email', None) or (customer.email if customer else "")
     
-    # Format a clean contact string if they exist
     contact_str = ""
     if contact_phone or contact_email:
         contact_parts = [p for p in [contact_phone, contact_email] if p]
@@ -97,7 +100,6 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
     elements.append(Table([[Paragraph(buyer_info, normal_style), Paragraph(meta_info, normal_style)]], colWidths=[400, 330]))
     elements.append(Spacer(1, 15))
 
-    # 3. STRICT 16-COLUMN GRID
     # 3. STRICT 16-COLUMN GRID
     table_data = [[
         "SR", "Desc/Name", "HSN", "Qty", "Unit", "Batch", "Mkt", "Exp Dt", 
@@ -121,17 +123,23 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
         taxable_val = item.unit_price * item.qty
         
         # ==========================================
-        # THE NEW APPROACH: DYNAMIC WMS LOOKUP
-        # We peek at the warehouse tasks to find the physical batch!
+        # DYNAMIC WMS LOOKUP (WAVE-AWARE)
         # ==========================================
         batch_val = "N/A"
         exp_val = "N/A"
         
-        # Look for the Pick Tasks associated with this specific order & product
-        tasks = db.query(PickTask).filter(
-            PickTask.order_id == invoice.order_id,
-            PickTask.product_id == item.product_id
-        ).all()
+        # Check if this order was crushed into a Wave!
+        if getattr(order, 'wave_id', None):
+            tasks = db.query(PickTask).filter(
+                PickTask.wave_id == order.wave_id,
+                PickTask.product_id == item.product_id
+            ).all()
+        else:
+            # It was a single order picked by itself
+            tasks = db.query(PickTask).filter(
+                PickTask.order_id == invoice.order_id,
+                PickTask.product_id == item.product_id
+            ).all()
         
         if tasks:
             batches = []
@@ -147,7 +155,6 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
                             if exp_str not in exps:
                                 exps.append(exp_str)
             
-            # If FEFO grabbed from multiple batches, this joins them with a comma!
             if batches:
                 batch_val = ", ".join(batches)
             if exps:
@@ -160,9 +167,9 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
             str(hsn),
             str(item.qty),
             str(unit),
-            str(batch_val),             # <--- Dynamically pulled from WMS PickTask
+            str(batch_val),             
             str(mkt),
-            str(exp_val),               # <--- Dynamically pulled from WMS PickTask
+            str(exp_val),               
             f"{mrp:.2f}",               
             f"{base_rate:.2f}",                 
             f"{disc_pct:.2f}%",         
@@ -177,8 +184,6 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
     footer_start_row = len(table_data)
     
     table_data.append(["", "", "", "", "", "", "", "", "", "", "", "", "SUBTOTAL:", "", "", f"${invoice.subtotal:.2f}"])
-    
-    # --- NEW: Added the Total Tax Row back in! ---
     table_data.append(["", "", "", "", "", "", "", "", "", "", "", "", "TOTAL TAX:", "", "", f"${invoice.tax_total:.2f}"])
     
     if getattr(invoice, 'round_off', 0.0) != 0.0:
@@ -224,6 +229,7 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
     buffer.seek(0)
     return buffer
 
+
 def generate_wave_pdf(db: Session, wave_id: int):
     """Generates a professional Bulk Wave Picklist PDF."""
     
@@ -246,7 +252,6 @@ def generate_wave_pdf(db: Session, wave_id: int):
     # Table Data
     table_data = [["Bin Location", "SKU / Product", "Expected Qty", "Check (✓)"]]
     
-    # We want to sort tasks by Bin Location to make the worker's walk efficient!
     tasks_with_locations = []
     for task in wave.tasks:
         product = db.query(Product).filter(Product.id == task.product_id).first()
@@ -259,7 +264,6 @@ def generate_wave_pdf(db: Session, wave_id: int):
             "qty": task.qty_expected
         })
         
-    # Sort alphabetically by Bin Location
     tasks_with_locations.sort(key=lambda x: x["bin"])
 
     for item in tasks_with_locations:
@@ -267,10 +271,9 @@ def generate_wave_pdf(db: Session, wave_id: int):
             item["bin"],
             f"{item['sku']}\n{item['name']}",
             str(item["qty"]),
-            "" # Empty box for the worker to check off with a pen
+            "" 
         ])
 
-    # Table Styling
     table_style = TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.darkorange),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
@@ -290,20 +293,18 @@ def generate_wave_pdf(db: Session, wave_id: int):
     
     return buffer, wave.wave_name
 
+
 def generate_picklist_pdf(picklist_data: dict) -> io.BytesIO:
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter)
     elements = []
     styles = getSampleStyleSheet()
 
-    # Title
     elements.append(Paragraph(f"Picklist: {picklist_data['picklist_id']}", styles['Title']))
     elements.append(Spacer(1, 12))
 
-    # Table Header
     data = [["SKU", "Product Name", "Location", "Quantity"]]
     
-    # Add Items
     for item in picklist_data['items']:
         data.append([
             item['sku'], 
@@ -312,7 +313,6 @@ def generate_picklist_pdf(picklist_data: dict) -> io.BytesIO:
             str(item['quantity'])
         ])
 
-    # Styling the Table
     t = Table(data, colWidths=[80, 250, 80, 60])
     t.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.indigo),
@@ -327,3 +327,97 @@ def generate_picklist_pdf(picklist_data: dict) -> io.BytesIO:
     doc.build(elements)
     buffer.seek(0)
     return buffer
+
+
+def generate_shipping_label_pdf(db: Session, order_id: int) -> tuple[io.BytesIO, str]:
+    """Generates a 4x6 inch thermal shipping label with a tracking barcode and Route ID."""
+    
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+        
+    # --- THE CHICKEN AND EGG RESOLVER ---
+    manifest = db.query(ShippingManifest).filter(ShippingManifest.order_id == order.id).first()
+    
+    if manifest:
+        tracking_number = manifest.tracking_number
+        carrier = manifest.carrier.upper()
+    else:
+        tracking_number = f"FDX-{order.id:010d}"
+        carrier = "FEDEX" 
+    # ---------------------------------------------
+
+    buffer = io.BytesIO()
+    
+    # Standard Thermal Label Size: 4x6 inches
+    PAGE_SIZE = (4 * inch, 6 * inch)
+    doc = SimpleDocTemplate(buffer, pagesize=PAGE_SIZE, rightMargin=15, leftMargin=15, topMargin=15, bottomMargin=15)
+    
+    elements = []
+    styles = getSampleStyleSheet()
+    
+    sender_style = ParagraphStyle('Sender', parent=styles['Normal'], fontSize=8, leading=10)
+    recipient_style = ParagraphStyle('Recipient', parent=styles['Normal'], fontSize=12, leading=14, leftIndent=20)
+    
+    # ==========================================
+    # 1. CARRIER & ORDER TYPE HEADER (30% Split)
+    # ==========================================
+    # Added 'leading' to prevent vertical squishing, and adjusted font sizes to prevent word-wrap!
+    carrier_style = ParagraphStyle(
+        'CarrierStyle', parent=styles['Heading1'], alignment=0, fontSize=16, leading=20
+    )
+    type_style = ParagraphStyle(
+        'TypeStyle', parent=styles['Heading1'], alignment=0, fontSize=24, leading=28
+    )
+    
+    order_type_str = order.order_type.value if hasattr(order.order_type, 'value') else str(order.order_type)
+    
+    if getattr(order, 'route', None):
+        display_text = f"{order_type_str} - {order.route.upper()}"
+    else:
+        display_text = order_type_str
+    
+    # Widened the left column slightly (85 points) to guarantee "FEDEX" or "USPS" never word-wraps
+    header_table = Table([
+        [Paragraph(f"<b>{carrier}</b>", carrier_style), Paragraph(f"<b>{display_text}</b>", type_style)]
+    ], colWidths=[85, 173])
+    
+    header_table.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5), # Added padding so it doesn't touch the line below
+        ('TOPPADDING', (0, 0), (-1, -1), 0),
+    ]))
+    
+    elements.append(header_table)
+    elements.append(Spacer(1, 15))
+    
+    # 2. RETURN ADDRESS 
+    sender_text = f"<b>FROM:</b><br/>{COMPANY_CONFIG['name']}<br/>{COMPANY_CONFIG['address'].replace(chr(10), '<br/>')}<br/>{COMPANY_CONFIG['phone']}"
+    elements.append(Paragraph(sender_text, sender_style))
+    elements.append(Spacer(1, 20))
+    
+    # 3. SHIP TO ADDRESS
+    contact_str = f"<br/>{order.phone}" if order.phone else ""
+    ship_to_text = f"<b>SHIP TO:</b><br/>{order.customer_name}{contact_str}<br/>{str(order.shipping_address or 'No Address Provided').replace(chr(10), '<br/>')}"
+    elements.append(Paragraph(ship_to_text, recipient_style))
+    elements.append(Spacer(1, 30))
+    
+    # 4. TRACKING BARCODE
+    barcode = createBarcodeDrawing('Code128', value=tracking_number, barHeight=0.8*inch, barWidth=1.2)
+    barcode.hAlign = 'CENTER' 
+    
+    elements.append(barcode)
+    elements.append(Spacer(1, 5))
+    
+    # 5. TRACKING NUMBER TEXT
+    tracking_text = ParagraphStyle('TrackTxt', parent=styles['Normal'], alignment=1, fontSize=10)
+    elements.append(Paragraph(f"<b>TRK# {tracking_number}</b>", tracking_text))
+    
+    # Order Reference at the very bottom
+    elements.append(Spacer(1, 20))
+    elements.append(Paragraph(f"Ref Order: {order.id}", sender_style))
+
+    doc.build(elements)
+    buffer.seek(0)
+    
+    return buffer, tracking_number

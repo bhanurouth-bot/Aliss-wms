@@ -41,7 +41,21 @@ class OrderItemResponse(BaseModel):
 
 class OrderResponse(BaseModel):
     id: int
+    customer_id: Optional[int] = None # Added CRM Link
     customer_name: str
+    
+    # --- NEW: Added CRM & B2B Fields to Response ---
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    billing_address: Optional[str] = None
+    shipping_address: Optional[str] = None
+    company_name: Optional[str] = None
+    tax_id: Optional[str] = None
+    
+    order_type: str
+    route: Optional[str] = None # <--- HERE IS YOUR ROUTE!
+    # -----------------------------------------------
+    
     status: OrderStatusSchema
     source: Optional[str] = "MANUAL_ENTRY"
     external_reference: Optional[str] = None
