@@ -36,10 +36,19 @@ def dispatch_order(
             detail=f"Order cannot be dispatched. Current status is {order.status.name}, expected PACKED."
         )
 
-    # 2. Check if it was already shipped
+    # 2. Check if this specific order was already shipped
     existing = db.query(ShippingManifest).filter(ShippingManifest.order_id == order.id).first()
     if existing:
         raise HTTPException(status_code=400, detail="Order has already been dispatched.")
+
+    # --- NEW: Catch Duplicate Tracking Numbers to prevent 500 error! ---
+    duplicate_tracking = db.query(ShippingManifest).filter(ShippingManifest.tracking_number == dispatch_data.tracking_number).first()
+    if duplicate_tracking:
+        raise HTTPException(
+            status_code=409, # HTTP 409 means "Conflict" (Duplicate Data)
+            detail=f"Tracking number '{dispatch_data.tracking_number}' is already assigned to Order #{duplicate_tracking.order_id}."
+        )
+    # -------------------------------------------------------------------
 
     # 3. Create the Shipping Manifest
     manifest = ShippingManifest(
@@ -58,10 +67,7 @@ def dispatch_order(
     db.refresh(manifest)
     
     # 5. --- FIRE THE WEBHOOK IN THE BACKGROUND ---
-    # We use order.external_reference (e.g., "AMZ-998877") so the external site knows which order this is.
-    # If there is no external reference, we just send the internal ERP ID.
     reference_id = order.external_reference or str(order.id)
-    
     send_shipping_webhook.delay(
         external_reference=reference_id,
         carrier=manifest.carrier,
@@ -100,8 +106,8 @@ def scan_to_ship_gate(
     High-speed scanner endpoint. The worker shoots the Order barcode, 
     shoots the Tracking Label barcode, and the box is instantly dispatched.
     """
-    # Clean the scanned barcodes (scanners sometimes add invisible newline characters)
     order_id_str = payload.order_id_barcode.strip().replace("ORD-", "")
+    tracking_clean = payload.tracking_barcode.strip()
     
     try:
         order_id = int(order_id_str)
@@ -118,13 +124,22 @@ def scan_to_ship_gate(
     if order.status != OrderStatus.PACKED:
         raise HTTPException(status_code=400, detail=f"STOP! Order is currently {order.status.name}. It must be PACKED first.")
 
+    # --- NEW: Catch Duplicate Tracking Numbers to prevent 500 error! ---
+    duplicate_tracking = db.query(ShippingManifest).filter(ShippingManifest.tracking_number == tracking_clean).first()
+    if duplicate_tracking:
+        raise HTTPException(
+            status_code=409, # 409 Conflict
+            detail=f"Barcode Error: Tracking '{tracking_clean}' is already assigned to Order #{duplicate_tracking.order_id}!"
+        )
+    # -------------------------------------------------------------------
+
     # Create the Manifest
     manifest = ShippingManifest(
         order_id=order.id,
         carrier=payload.carrier,
-        tracking_number=payload.tracking_barcode.strip(),
+        tracking_number=tracking_clean,
         actual_weight_kg=payload.actual_weight_kg,
-        shipping_cost=0.0 # Billed later to carrier account
+        shipping_cost=0.0 
     )
     db.add(manifest)
 
@@ -134,6 +149,12 @@ def scan_to_ship_gate(
     db.commit()
     db.refresh(manifest)
     
-    # (Optional: Trigger your send_shipping_webhook here)
+    # Optional Webhook Trigger
+    reference_id = order.external_reference or str(order.id)
+    send_shipping_webhook.delay(
+        external_reference=reference_id,
+        carrier=manifest.carrier,
+        tracking_number=manifest.tracking_number
+    )
     
     return manifest
