@@ -15,7 +15,8 @@ from src.models.product import Product
 from src.models.wms_ops import PickingWave
 from src.models.wms import Bin
 from src.models.customer import Customer
-
+from src.models.wms_ops import PickTask
+from src.models.inventory import ProductBatch
 # ==========================================
 # MODULAR COMPANY CONFIGURATION
 # Edit these details as your business changes
@@ -97,6 +98,7 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
     elements.append(Spacer(1, 15))
 
     # 3. STRICT 16-COLUMN GRID
+    # 3. STRICT 16-COLUMN GRID
     table_data = [[
         "SR", "Desc/Name", "HSN", "Qty", "Unit", "Batch", "Mkt", "Exp Dt", 
         "MRP", "Rate", "Disc %", "Net Rate", "Taxable", "CGST", "SGST", "Amount"
@@ -118,14 +120,39 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
             
         taxable_val = item.unit_price * item.qty
         
-        batch_val = getattr(item, 'batch_number', 'N/A') or 'N/A'
+        # ==========================================
+        # THE NEW APPROACH: DYNAMIC WMS LOOKUP
+        # We peek at the warehouse tasks to find the physical batch!
+        # ==========================================
+        batch_val = "N/A"
+        exp_val = "N/A"
         
-        exp_val = getattr(item, 'exp_date', 'N/A')
-        if exp_val and exp_val != 'N/A':
-            if hasattr(exp_val, 'strftime'):
-                exp_val = exp_val.strftime('%Y-%m-%d')
-        else:
-            exp_val = 'N/A'
+        # Look for the Pick Tasks associated with this specific order & product
+        tasks = db.query(PickTask).filter(
+            PickTask.order_id == invoice.order_id,
+            PickTask.product_id == item.product_id
+        ).all()
+        
+        if tasks:
+            batches = []
+            exps = []
+            for task in tasks:
+                if task.batch_id:
+                    batch = db.query(ProductBatch).filter(ProductBatch.id == task.batch_id).first()
+                    if batch:
+                        if batch.batch_number and batch.batch_number not in batches:
+                            batches.append(batch.batch_number)
+                        if batch.expiry_date:
+                            exp_str = batch.expiry_date.strftime('%Y-%m-%d')
+                            if exp_str not in exps:
+                                exps.append(exp_str)
+            
+            # If FEFO grabbed from multiple batches, this joins them with a comma!
+            if batches:
+                batch_val = ", ".join(batches)
+            if exps:
+                exp_val = ", ".join(exps)
+        # ==========================================
         
         table_data.append([
             str(idx),
@@ -133,9 +160,9 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
             str(hsn),
             str(item.qty),
             str(unit),
-            str(batch_val),             
+            str(batch_val),             # <--- Dynamically pulled from WMS PickTask
             str(mkt),
-            str(exp_val),               
+            str(exp_val),               # <--- Dynamically pulled from WMS PickTask
             f"{mrp:.2f}",               
             f"{base_rate:.2f}",                 
             f"{disc_pct:.2f}%",         
