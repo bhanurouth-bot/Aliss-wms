@@ -38,7 +38,9 @@ def generate_invoice(
         invoice_number=invoice_number,
         order_id=order.id,
         due_date=datetime.now() + timedelta(days=30) if order.order_type == CustomerType.B2B else datetime.now(),
-        status=InvoiceStatus.UNPAID if order.order_type == CustomerType.B2B else InvoiceStatus.PAID
+        
+        status=InvoiceStatus.UNPAID,
+        amount_paid=0.0
     )
     db.add(db_invoice)
     db.flush()
