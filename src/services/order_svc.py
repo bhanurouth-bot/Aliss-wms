@@ -73,6 +73,7 @@ def create_order_with_fefo_reservation(db: Session, order_in: OrderCreate, allow
             raise HTTPException(status_code=404, detail=f"Product {item.product_id} not found.")
 
         # --- 1. KIT EXPLOSION ALGORITHM ---
+        # --- 1. KIT EXPLOSION ALGORITHM ---
         components_to_allocate = []
         if product.is_kit and product.components:
             for comp in product.components:
@@ -86,53 +87,68 @@ def create_order_with_fefo_reservation(db: Session, order_in: OrderCreate, allow
                 "qty_needed": item.qty
             })
 
+        # ==========================================
+        # --- NEW: THE PRE-CHECK SHIELD ---
+        # ==========================================
         kit_fully_allocated = True
-        
-        # --- 2. THE FEFO SHIELD ---
         for comp_req in components_to_allocate:
-            inventory_records = (
-                db.query(Inventory)
-                .outerjoin(ProductBatch, Inventory.batch_id == ProductBatch.id)
-                .filter(
-                    Inventory.product_id == comp_req["product_id"], 
-                    Inventory.qty_available > 0,
-                    Inventory.qc_status == QCStatus.AVAILABLE
-                )
-                .order_by(ProductBatch.expiry_date.asc())
-                .with_for_update() 
-                .all()
-            )
+            available_stock = db.query(func.sum(Inventory.qty_available)).filter(
+                Inventory.product_id == comp_req["product_id"],
+                Inventory.qc_status == QCStatus.AVAILABLE
+            ).scalar() or 0.0
             
-            remaining_qty_to_reserve = comp_req["qty_needed"]
-            
-            for inv in inventory_records:
-                if remaining_qty_to_reserve <= 0:
-                    break
-                    
-                qty_to_take = min(inv.qty_available, remaining_qty_to_reserve)
-                
-                # Physical inventory reservation
-                inv.qty_available -= qty_to_take
-                inv.qty_reserved += qty_to_take
-                remaining_qty_to_reserve -= qty_to_take
-                
-                # --- REAL LOGIC: CREATE THE INITIAL PICK TASK ---
-                initial_task = PickTask(
-                    order_id=db_order.id,
-                    product_id=comp_req["product_id"],
-                    bin_id=inv.bin_id,
-                    batch_id=inv.batch_id,
-                    qty_expected=qty_to_take,
-                    qty_picked=0.0,
-                    status=TaskStatus.PENDING
-                )
-                db.add(initial_task)
-            
-            if remaining_qty_to_reserve > 0:
+            if available_stock < comp_req["qty_needed"]:
                 kit_fully_allocated = False
+                break
+
+        # ==========================================
+        # --- 2. THE FEFO MUTATION (Only runs if safe!) ---
+        # ==========================================
+        if kit_fully_allocated:
+            for comp_req in components_to_allocate:
+                inventory_records = (
+                    db.query(Inventory)
+                    .outerjoin(ProductBatch, Inventory.batch_id == ProductBatch.id)
+                    .filter(
+                        Inventory.product_id == comp_req["product_id"], 
+                        Inventory.qty_available > 0,
+                        Inventory.qc_status == QCStatus.AVAILABLE
+                    )
+                    .order_by(ProductBatch.expiry_date.asc())
+                    .with_for_update() 
+                    .all()
+                )
                 
+                remaining_qty_to_reserve = comp_req["qty_needed"]
+                
+                for inv in inventory_records:
+                    if remaining_qty_to_reserve <= 0:
+                        break
+                        
+                    qty_to_take = min(inv.qty_available, remaining_qty_to_reserve)
+                    
+                    # Physical inventory reservation
+                    inv.qty_available -= qty_to_take
+                    inv.qty_reserved += qty_to_take
+                    remaining_qty_to_reserve -= qty_to_take
+                    
+                    # --- REAL LOGIC: CREATE THE INITIAL PICK TASK ---
+                    initial_task = PickTask(
+                        order_id=db_order.id,
+                        product_id=comp_req["product_id"],
+                        bin_id=inv.bin_id,
+                        batch_id=inv.batch_id,
+                        qty_expected=qty_to_take,
+                        qty_picked=0.0,
+                        status=TaskStatus.PENDING
+                    )
+                    db.add(initial_task)
+
+            db_item.qty_allocated = item.qty
+            db_item.qty_backordered = 0
+            
         # --- 3. APPLY TO ORDER STATUS ---
-        if not kit_fully_allocated:
+        else:
             if not allow_backorder:
                 db.rollback() 
                 raise HTTPException(
@@ -143,9 +159,6 @@ def create_order_with_fefo_reservation(db: Session, order_in: OrderCreate, allow
                 is_backordered = True
                 db_item.qty_allocated = 0
                 db_item.qty_backordered = item.qty
-        else:
-            db_item.qty_allocated = item.qty
-            db_item.qty_backordered = 0
             
     if is_backordered:
         db_order.status = OrderStatus.BACKORDERED
