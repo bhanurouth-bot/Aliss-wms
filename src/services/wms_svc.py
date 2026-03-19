@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from fastapi import HTTPException
 from sqlalchemy import func
 
-from src.models.wms_ops import PickTask, PickingWave, TaskStatus 
+from src.models.wms_ops import WarehouseTask, PickingWave, TaskStatus 
 from src.models.wms import Bin
 from src.models.product import Product
 from src.models.inventory import Inventory
@@ -20,7 +20,7 @@ def confirm_pick_task(
     worker_id: int
 ):
     # 1. Fetch the exact task
-    task = db.query(PickTask).filter(PickTask.id == task_id).first()
+    task = db.query(WarehouseTask).filter(WarehouseTask.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found.")
     
@@ -66,9 +66,9 @@ def confirm_pick_task(
     # --- 6. CHECK IF THE PARENT (ORDER OR WAVE) IS FINISHED ---
     if task.order_id:
         # Ask the DB: Are there any tasks for this order that are NOT completed?
-        incomplete_tasks = db.query(PickTask).filter(
-            PickTask.order_id == task.order_id,
-            PickTask.status != TaskStatus.COMPLETED
+        incomplete_tasks = db.query(WarehouseTask).filter(
+            WarehouseTask.order_id == task.order_id,
+            WarehouseTask.status != TaskStatus.COMPLETED
         ).count()
         
         if incomplete_tasks == 0:
@@ -78,9 +78,9 @@ def confirm_pick_task(
 
     elif task.wave_id:
         # Ask the DB: Are there any tasks for this wave that are NOT completed?
-        incomplete_tasks = db.query(PickTask).filter(
-            PickTask.wave_id == task.wave_id,
-            PickTask.status != TaskStatus.COMPLETED
+        incomplete_tasks = db.query(WarehouseTask).filter(
+            WarehouseTask.wave_id == task.wave_id,
+            WarehouseTask.status != TaskStatus.COMPLETED
         ).count()
         
         if incomplete_tasks == 0:

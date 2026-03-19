@@ -7,14 +7,14 @@ from typing import List, Optional
 from src.core.database import get_db
 from src.core.security import require_role
 from src.models.order import Order, OrderStatus, CustomerType
-from src.models.wms_ops import PickingWave, PickTask
+from src.models.wms_ops import PickingWave, WarehouseTask
 from fastapi.responses import StreamingResponse
 from src.schemas import wms_ops as wms_schemas
 from src.services.pdf_svc import generate_wave_pdf
 from src.models.product import Product
-from src.models.wms_ops import PickTask, TaskStatus
+from src.models.wms_ops import WarehouseTask, TaskStatus
 from src.models.order import Order, OrderStatus, CustomerType
-from src.models.wms_ops import PickingWave, PickTask, TaskStatus 
+from src.models.wms_ops import PickingWave, WarehouseTask, TaskStatus 
 from src.core.database import get_db
 
 
@@ -66,7 +66,7 @@ def generate_smart_wave(
 
         # We find the individual pick tasks the FEFO engine already generated for this order
         # and we crush them together!
-        existing_tasks = db.query(PickTask).filter(PickTask.order_id == order.id).all()
+        existing_tasks = db.query(WarehouseTask).filter(WarehouseTask.order_id == order.id).all()
         
         for task in existing_tasks:
             key = f"{task.product_id}_{task.bin_id}_{task.batch_id}"
@@ -82,7 +82,7 @@ def generate_smart_wave(
     for key, total_qty in aggregated_picks.items():
         product_id, bin_id, batch_id = key.split("_")
         
-        wave_task = PickTask(
+        wave_task = WarehouseTask(
             wave_id=wave.id,
             product_id=int(product_id),
             bin_id=int(bin_id),

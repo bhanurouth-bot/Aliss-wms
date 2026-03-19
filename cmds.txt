@@ -2,3 +2,7 @@ celery -A src.worker.celery_app worker --pool=solo --loglevel=info
 uvicorn src.main:app --host 127.0.0.1 --port 8001 --reload
 
 pass for webhook: super_secret_amazon_shopify_key_2026
+
+
+run alembic revision --autogenerate -m "Rename PickTask to WarehouseTask"
+alembic upgrade head

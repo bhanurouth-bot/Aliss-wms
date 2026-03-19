@@ -7,7 +7,7 @@ from datetime import datetime
 
 from src.core.database import get_db
 from src.core.security import require_role
-from src.models.wms_ops import PickTask, TaskStatus
+from src.models.wms_ops import WarehouseTask, TaskStatus
 from src.models.auth import User
 
 router = APIRouter(prefix="/app/pull", tags=["PULL APP (Contractors)"])
@@ -21,23 +21,23 @@ def require_pull_access(current_user = Depends(require_role(["Warehouse Staff"])
 # Inside src/api/app_pull.py
 @router.get("/queue")
 def get_pull_queue(task_type: Optional[str] = None, db: Session = Depends(get_db), worker = Depends(require_pull_access)):
-    query = db.query(PickTask).filter(
-        PickTask.status == TaskStatus.PENDING,
-        PickTask.assigned_to == None,
-        PickTask.claimed_by == None
+    query = db.query(WarehouseTask).filter(
+        WarehouseTask.status == TaskStatus.PENDING,
+        WarehouseTask.assigned_to == None,
+        WarehouseTask.claimed_by == None
     )
     
     if task_type:
-        query = query.filter(PickTask.task_type == task_type)
+        query = query.filter(WarehouseTask.task_type == task_type)
         
     # --- THE MAGIC SORTING ---
     # Sorts descending by priority (3, 2, 1), then ascending by ID (oldest first)
-    return query.order_by(PickTask.priority.desc(), PickTask.id.asc()).all()
+    return query.order_by(WarehouseTask.priority.desc(), WarehouseTask.id.asc()).all()
 
 @router.post("/{task_id}/start-timer")
 def claim_and_start_task(task_id: int, db: Session = Depends(get_db), worker = Depends(require_pull_access)):
     """Worker clicks 'Start'. It claims the task and starts the un-cheatable backend clock."""
-    task = db.query(PickTask).filter(PickTask.id == task_id).with_for_update().first()
+    task = db.query(WarehouseTask).filter(WarehouseTask.id == task_id).with_for_update().first()
     
     if task.claimed_by or task.assigned_to:
         raise HTTPException(status_code=409, detail="Task is no longer available.")

@@ -10,7 +10,7 @@ from src.models.product import Product
 from src.models.customer import Customer
 
 # --- IMPORT THESE NEW MODELS ---
-from src.models.wms_ops import PickTask, TaskStatus
+from src.models.wms_ops import WarehouseTask, TaskStatus
 
 def create_order_with_fefo_reservation(db: Session, order_in: OrderCreate, allow_backorder: bool = False):
     """Creates an order, links/creates the CRM Customer, explodes Kits, and secures physical inventory."""
@@ -133,7 +133,7 @@ def create_order_with_fefo_reservation(db: Session, order_in: OrderCreate, allow
                     remaining_qty_to_reserve -= qty_to_take
                     
                     # --- REAL LOGIC: CREATE THE INITIAL PICK TASK ---
-                    initial_task = PickTask(
+                    initial_task = WarehouseTask(
                         order_id=db_order.id,
                         product_id=comp_req["product_id"],
                         bin_id=inv.bin_id,
@@ -238,7 +238,7 @@ def allocate_backordered_order(db: Session, order_id: int):
                 remaining_to_fulfill -= qty_to_take
                 
                 # --- REAL LOGIC: CREATE THE BACKORDER PICK TASK ---
-                backorder_task = PickTask(
+                backorder_task = WarehouseTask(
                     order_id=order.id,
                     product_id=comp_req["product_id"],
                     bin_id=inv.bin_id,

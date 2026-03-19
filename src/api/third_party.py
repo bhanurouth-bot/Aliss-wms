@@ -9,7 +9,7 @@ from src.core.security import require_role
 from src.models.third_party import ClientStorageLog
 from src.models.billing import Invoice, InvoiceItem, InvoiceStatus
 from src.models.order import Order
-from src.models.wms_ops import PickTask, TaskStatus
+from src.models.wms_ops import WarehouseTask, TaskStatus
 
 # --- IMPORT YOUR AUDIT ENGINE ---
 from src.services.audit_svc import log_activity
@@ -39,12 +39,12 @@ def generate_3pl_monthly_invoice(
     # 2. CALCULATE HANDLING FEES (The Pick Tasks)
     # ==========================================
     # Find all completed pick tasks for this client's orders this month
-    items_handled = db.query(func.sum(PickTask.qty_picked)).join(Order, Order.id == PickTask.order_id).filter(
+    items_handled = db.query(func.sum(WarehouseTask.qty_picked)).join(Order, Order.id == WarehouseTask.order_id).filter(
         Order.customer_id == client_id,
-        PickTask.status == TaskStatus.COMPLETED,
-        # Assuming your PickTask model has an updated_at or completed_at timestamp
-        func.extract('month', PickTask.updated_at) == month, 
-        func.extract('year', PickTask.updated_at) == year
+        WarehouseTask.status == TaskStatus.COMPLETED,
+        # Assuming your WarehouseTask model has an updated_at or completed_at timestamp
+        func.extract('month', WarehouseTask.updated_at) == month, 
+        func.extract('year', WarehouseTask.updated_at) == year
     ).scalar() or 0.0
 
     handling_fee_rate = 1.50  # $1.50 per item picked

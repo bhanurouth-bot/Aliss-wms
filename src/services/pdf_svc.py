@@ -15,7 +15,7 @@ from reportlab.graphics.shapes import Drawing
 from src.models.billing import Invoice
 from src.models.order import Order, CustomerType
 from src.models.product import Product
-from src.models.wms_ops import PickingWave, PickTask
+from src.models.wms_ops import PickingWave, WarehouseTask
 from src.models.wms import Bin
 from src.models.inventory import ProductBatch
 from src.models.customer import Customer
@@ -130,15 +130,15 @@ def _generate_tax_invoice(db: Session, invoice: Invoice, order: Order, is_b2b: b
         
         # Check if this order was crushed into a Wave!
         if getattr(order, 'wave_id', None):
-            tasks = db.query(PickTask).filter(
-                PickTask.wave_id == order.wave_id,
-                PickTask.product_id == item.product_id
+            tasks = db.query(WarehouseTask).filter(
+                WarehouseTask.wave_id == order.wave_id,
+                WarehouseTask.product_id == item.product_id
             ).all()
         else:
             # It was a single order picked by itself
-            tasks = db.query(PickTask).filter(
-                PickTask.order_id == invoice.order_id,
-                PickTask.product_id == item.product_id
+            tasks = db.query(WarehouseTask).filter(
+                WarehouseTask.order_id == invoice.order_id,
+                WarehouseTask.product_id == item.product_id
             ).all()
         
         if tasks:

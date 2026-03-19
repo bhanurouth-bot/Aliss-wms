@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from src.core.database import get_db
 from src.core.security import require_role
 from src.models.inventory import Inventory, ProductBatch, QCStatus
-from src.models.wms_ops import PickTask, TaskStatus
+from src.models.wms_ops import WarehouseTask, TaskStatus
 
 router = APIRouter(prefix="/pdn", tags=["PDN & Expiry Management"])
 
@@ -39,7 +39,7 @@ def generate_expiry_pull_tasks(
         inv.qc_status = QCStatus.QUARANTINED 
         
         # 3. Generate a special Pull-Model task for the workers
-        pull_task = PickTask(
+        pull_task = WarehouseTask(
             order_id=None, # Not for a customer!
             product_id=inv.product_id,
             bin_id=inv.bin_id,

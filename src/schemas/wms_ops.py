@@ -8,7 +8,7 @@ class TaskStatusSchema(str, Enum):
     IN_PROGRESS = "IN_PROGRESS"
     COMPLETED = "COMPLETED"
 
-class PickTaskResponse(BaseModel):
+class WarehouseTaskResponse(BaseModel):
     id: int
     product_id: int
     bin_id: int
@@ -23,7 +23,7 @@ class PicklistResponse(BaseModel):
     id: int
     order_id: int
     status: TaskStatusSchema
-    tasks: List[PickTaskResponse]
+    tasks: List[WarehouseTaskResponse]
     
     model_config = {"from_attributes": True}
 
@@ -32,7 +32,7 @@ class PickConfirmation(BaseModel):
     scanned_product_barcode: str
     qty_picked: float
 
-class PickTaskResponse(BaseModel):
+class WarehouseTaskResponse(BaseModel):
     id: int
     product_id: int
     bin_id: int
@@ -46,5 +46,5 @@ class PickingWaveResponse(BaseModel):
     id: int
     wave_name: str
     status: str
-    tasks: List[PickTaskResponse] = []
+    tasks: List[WarehouseTaskResponse] = []
     model_config = {"from_attributes": True}
