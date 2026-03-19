@@ -6,6 +6,10 @@ from src.core.database import get_db
 from src.core.security import require_role
 from src.schemas import cycle_count as schemas
 from src.models.inventory import Inventory, InventoryAdjustment
+from typing import List
+from src.services.wms_svc import generate_warehouse_task
+from src.models.inventory import Inventory
+from src.models.wms import Bin
 
 router = APIRouter(prefix="/cycle-counts", tags=["Inventory Cycle Counting"])
 
@@ -68,3 +72,35 @@ def record_cycle_count(
     db.refresh(adjustment)
     
     return adjustment
+
+@router.post("/generate-audit-tasks/{zone_id}", tags=["Task Makers"])
+def generate_zone_audit_tasks(
+    zone_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["Admin", "Warehouse Manager"]))
+):
+    """Manager clicks 'Audit Zone'. It creates URGENT tasks for part-timers to count."""
+    
+    # 1. Find all active inventory sitting in this specific physical zone
+    active_inventory = db.query(Inventory).join(Bin, Inventory.bin_id == Bin.id).filter(
+        Bin.zone_id == zone_id,
+        Inventory.qty_available > 0
+    ).all()
+    
+    tasks_created = 0
+    for inv in active_inventory:
+        # 2. Fire the Task Maker! 
+        generate_warehouse_task(
+            db=db,
+            task_type="CYCLE_COUNT",
+            product_id=inv.product_id,
+            bin_id=inv.bin_id,
+            qty_expected=0.0, # It's a blind count, so we don't tell the worker what to expect!
+            priority=2,       # URGENT: Audits jump to the top of the queue
+            batch_id=inv.batch_id,
+            target_time_seconds=300 # 5 minutes to count a bin
+        )
+        tasks_created += 1
+        
+    db.commit()
+    return {"message": f"Successfully generated {tasks_created} blind Cycle Count tasks for Zone {zone_id}."}

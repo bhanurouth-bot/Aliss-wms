@@ -11,6 +11,7 @@ from src.models.inventory import Inventory, ProductBatch  # <-- Added ProductBat
 from src.schemas import purchasing as schemas
 from src.models.wms import Bin
 from src.services.order_svc import auto_cross_dock
+from src.services.wms_svc import generate_warehouse_task
 
 router = APIRouter(prefix="/purchasing", tags=["Inbound POs & Receiving (GRN)"])
 
@@ -149,6 +150,18 @@ def receive_po_and_generate_grn(
     po_fully_received = all(i.qty_received >= i.qty_ordered for i in po_items)
 
     po.status = POStatus.COMPLETED if po_fully_received else POStatus.PARTIAL_RECEIVED
+
+    if not cross_docked_orders:
+            generate_warehouse_task(
+                db=db,
+                task_type="GRN_PUTAWAY",
+                product_id=item.product_id,
+                bin_id=item.bin_id, # This is the Loading Dock Bin
+                qty_expected=item.qty_received,
+                priority=1, # Normal priority putaway
+                batch_id=actual_batch_id,
+                target_time_seconds=600 # 10 mins for forklift driver
+            )
 
     db.commit()
     db.refresh(db_grn)

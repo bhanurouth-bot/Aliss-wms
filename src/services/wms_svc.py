@@ -2,13 +2,40 @@
 from sqlalchemy.orm import Session
 from fastapi import HTTPException
 from sqlalchemy import func
-
+from sqlalchemy.orm import Session
 from src.models.wms_ops import WarehouseTask, PickingWave, TaskStatus 
 from src.models.wms import Bin
 from src.models.product import Product
 from src.models.inventory import Inventory
 from src.models.order import Order, OrderStatus
 from src.worker.tasks import send_inventory_webhook
+
+def generate_warehouse_task(
+    db: Session,
+    task_type: str,
+    product_id: int,
+    bin_id: int,
+    qty_expected: float,
+    priority: int = 1,
+    batch_id: int = None,
+    order_id: int = None,
+    target_time_seconds: int = 120
+):
+    """The Universal WES Task Generator."""
+    task = WarehouseTask(
+        task_type=task_type,
+        product_id=product_id,
+        bin_id=bin_id,
+        qty_expected=qty_expected,
+        qty_picked=0.0,
+        status=TaskStatus.PENDING,
+        priority=priority,
+        batch_id=batch_id,
+        order_id=order_id,
+        target_time_seconds=target_time_seconds
+    )
+    db.add(task)
+    return task
 
 
 def confirm_pick_task(
