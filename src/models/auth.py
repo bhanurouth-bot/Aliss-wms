@@ -8,6 +8,7 @@ class User(Base):
     username = Column(String, unique=True, index=True)
     email = Column(String, unique=True, index=True)
     hashed_password = Column(String)
+    employment_type = Column(String, default="FULL_TIME") # 'FULL_TIME' or 'PART_TIME'
     
     # 'Admin', 'Warehouse Staff', 'Production Manager', 'Purchasing'
     role = Column(String, default="Warehouse Staff") 

@@ -25,7 +25,6 @@ class PickTask(Base):
     __tablename__ = 'pick_tasks'
     id = Column(Integer, primary_key=True, index=True)
     
-    # A task can belong to a single order OR a bulk wave
     order_id = Column(Integer, ForeignKey('orders.id'), nullable=True) 
     wave_id = Column(Integer, ForeignKey('picking_waves.id'), nullable=True)
     
@@ -39,5 +38,15 @@ class PickTask(Base):
     
     wave = relationship("PickingWave", back_populates="tasks")
 
-    worker_id = Column(Integer, ForeignKey('users.id'), nullable=True) # Who picked it?
+    # --- THE HYBRID LMS COLUMNS ---
+    task_type = Column(String, default="OUTBOUND_PICK") # 'OUTBOUND_PICK', 'EXPIRY_PULL', 'REPLENISH', 'GRN_PUTAWAY'
+    assigned_to = Column(Integer, ForeignKey('users.id'), nullable=True) # PUSH MODEL (Manager assigns)
+    claimed_by = Column(Integer, ForeignKey('users.id'), nullable=True)  # PULL MODEL (Worker grabs)
+    
+    # Legacy: keep worker_id for who actually *finished* it
+    worker_id = Column(Integer, ForeignKey('users.id'), nullable=True) 
+    target_time_seconds = Column(Integer, default=120) # e.g., They have 2 minutes to pick this
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    # 1 = NORMAL, 2 = URGENT, 3 = VERY URGENT
+    priority = Column(Integer, default=1)
     completed_at = Column(DateTime(timezone=True), nullable=True)

@@ -7,6 +7,7 @@ from src.core.database import get_db
 from src.core.security import require_role
 from src.services.wms_svc import confirm_pick_task
 
+# This router now strictly handles physical scanner guns, no LMS queues!
 router = APIRouter(prefix="/wms/tasks", tags=["WMS Operations & Scanning"])
 
 class PickScanRequest(BaseModel):
