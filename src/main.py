@@ -40,6 +40,12 @@ from src.api import transfers as transfers_api
 from src.api import qc as qc_api
 from src.api import waves as waves_api
 from src.api import sales
+from src.api import scanner as scanner_api
+from src.api import app_pull as app_pull_api
+from src.api import app_push as app_push_api
+from src.api import pdn as pdn_api
+from src.api import third_party as third_party_api
+
 
 # Initialize Rate Limiter (Tracks IPs)
 limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
@@ -91,6 +97,12 @@ app.include_router(transfers_api.router)
 app.include_router(qc_api.router)
 app.include_router(waves_api.router)
 app.include_router(sales.router)
+app.include_router(scanner_api.router)
+app.include_router(app_pull_api.router)
+app.include_router(app_push_api.router)
+app.include_router(pdn_api.router)
+app.include_router(third_party_api.router)
+
 
 # --- REAL-TIME WEBSOCKETS ---
 
