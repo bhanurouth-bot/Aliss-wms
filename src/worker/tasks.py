@@ -1,16 +1,39 @@
 # src/worker/tasks.py
 import logging
+import requests
 from src.worker.celery_app import celery_app
 from src.core.database import SessionLocal
 from src.services.aps_svc import run_replenishment_engine
-from src.worker.celery_app import celery_app
-import requests
+from src.services.audit_svc import log_activity
 
 # The URL of your e-commerce storefront's API
 WEBSITE_WEBHOOK_URL = "https://your-website.com/api/webhooks/erp-sync"
 WEBHOOK_SECRET = "super_secret_webhook_key_to_prove_its_the_erp"
 
 logger = logging.getLogger(__name__)
+
+@celery_app.task(bind=True, max_retries=3)
+def async_write_audit_log(self, username: str, method: str, path: str, status_code: int):
+    """
+    Background task to write audit logs via Celery Queue.
+    This prevents the main FastAPI app from exhausting database connections.
+    """
+    db = SessionLocal()
+    try:
+        log_activity(
+            db=db,
+            username=username,
+            action=method,
+            entity=path,
+            entity_id=0,
+            details=f"Global API Audit: {method} {path} resulted in HTTP {status_code}"
+        )
+    except Exception as e:
+        logger.error(f"Failed to write audit log: {str(e)}")
+        db.rollback()
+        raise self.retry(exc=e, countdown=10)
+    finally:
+        db.close()
 
 @celery_app.task(bind=True, max_retries=3)
 def nightly_aps_run(self):

@@ -1,5 +1,10 @@
 # src/main.py
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.errors import RateLimitExceeded
+from fastapi.middleware.cors import CORSMiddleware
 from src.core.database import engine, Base
 
 # Import models to ensure tables are created
@@ -33,19 +38,36 @@ from src.api import qc as qc_api
 from src.api import waves as waves_api
 from src.api import sales
 
+# Initialize Rate Limiter (Tracks IPs)
+limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
+
 # Create tables
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="Pet Products ERP API",
-    description="Enterprise Backend for WMS, APS, and Order Management",
-    version="1.0.0"
+    description="Enterprise Backend for WMS, APS, and Order Management - Secured",
+    version="1.0.1"
 )
 
-# Add Middleware
-app.add_middleware(GlobalAuditMiddleware)
+# --- SECURITY: Register Rate Limiter ---
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Include routers (Cleaned up duplicates!)
+# --- SECURITY: Add CORS Middleware ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "https://your-production-frontend.com"], # Update these!
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- Add Audit Middleware ---
+app.add_middleware(GlobalAuditMiddleware)
+app.add_middleware(SlowAPIMiddleware)
+
+# Include routers
 app.include_router(auth_api.router)
 app.include_router(products_api.router)
 app.include_router(wms_api.router)
@@ -67,7 +89,6 @@ app.include_router(qc_api.router)
 app.include_router(waves_api.router)
 app.include_router(sales.router)
 
-
 @app.get("/health")
 def health_check():
-    return {"status": "online", "database": "SQLite connected."}
+    return {"status": "online", "database": "Database Connected"}
