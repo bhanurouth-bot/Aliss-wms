@@ -1,11 +1,14 @@
 # src/main.py
-from fastapi import FastAPI, Request
+import os
+import asyncio
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.errors import RateLimitExceeded
 from fastapi.middleware.cors import CORSMiddleware
 from src.core.database import engine, Base
+from src.core.websockets import manager, listen_to_redis_pubsub
 
 # Import models to ensure tables are created
 from src.models import (
@@ -54,18 +57,18 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# --- SECURITY: Add CORS Middleware ---
+# --- MIDDLEWARE ---
+# Note: FastAPI executes middleware bottom-up for incoming requests.
+# We want CORS first, then Rate Limiting, then Audit.
+app.add_middleware(GlobalAuditMiddleware)
+app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://your-production-frontend.com"], # Update these!
+    allow_origins=["http://localhost:3000", "https://your-production-frontend.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# --- Add Audit Middleware ---
-app.add_middleware(GlobalAuditMiddleware)
-app.add_middleware(SlowAPIMiddleware)
 
 # Include routers
 app.include_router(auth_api.router)
@@ -89,6 +92,31 @@ app.include_router(qc_api.router)
 app.include_router(waves_api.router)
 app.include_router(sales.router)
 
+# --- REAL-TIME WEBSOCKETS ---
+
+@app.on_event("startup")
+async def startup_event():
+    """Start the Redis listener in the background when FastAPI boots up."""
+    # Look for REDIS_URL first, fallback to CELERY_BROKER_URL, then local default
+    redis_url = os.getenv("REDIS_URL", os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0"))
+    
+    # We only start the listener if we actually have a redis:// or rediss:// URL
+    if redis_url.startswith("redis"):
+        asyncio.create_task(listen_to_redis_pubsub(redis_url))
+    else:
+        print("⚠️ Warning: No valid Redis URL found. WebSockets will not receive background alerts.")
+
+@app.websocket("/ws/notifications")
+async def websocket_endpoint(websocket: WebSocket):
+    """The endpoint the frontend connects to for real-time alerts."""
+    await manager.connect(websocket)
+    try:
+        while True:
+            # We just keep the connection open.
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+        
 @app.get("/health")
 def health_check():
     return {"status": "online", "database": "Database Connected"}

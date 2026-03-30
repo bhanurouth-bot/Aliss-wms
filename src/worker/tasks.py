@@ -1,6 +1,9 @@
 # src/worker/tasks.py
 import logging
 import requests
+import json
+import os
+import redis # <-- Added redis import
 from src.worker.celery_app import celery_app
 from src.core.database import SessionLocal
 from src.services.aps_svc import run_replenishment_engine
@@ -11,6 +14,22 @@ WEBSITE_WEBHOOK_URL = "https://your-website.com/api/webhooks/erp-sync"
 WEBHOOK_SECRET = "super_secret_webhook_key_to_prove_its_the_erp"
 
 logger = logging.getLogger(__name__)
+
+# --- NEW: Initialize a synchronous Redis client for the worker ---
+# --- Safely Initialize Redis Client ---
+_raw_redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+if _raw_redis_url:
+    _raw_redis_url = _raw_redis_url.strip(' \'"\r\n')
+
+if not _raw_redis_url or not _raw_redis_url.startswith(("redis://", "rediss://", "unix://")):
+    _raw_redis_url = "redis://localhost:6379/0"
+
+_redis_kwargs = {}
+if _raw_redis_url.startswith("rediss://"):
+    _redis_kwargs["ssl_cert_reqs"] = "none"
+
+redis_client = redis.Redis.from_url(_raw_redis_url, **_redis_kwargs)
+# -----------------------------------------------------
 
 @celery_app.task(bind=True, max_retries=3)
 def async_write_audit_log(self, username: str, method: str, path: str, status_code: int):
@@ -48,6 +67,15 @@ def nightly_aps_run(self):
     try:
         # Run the exact same engine we built earlier!
         recommendations = run_replenishment_engine(db)
+        
+        # --- NEW: SEND WEBSOCKET NOTIFICATION ---
+        alert_payload = {
+            "type": "APS_RUN_COMPLETE",
+            "message": f"Nightly replenishment finished. Generated {len(recommendations)} PO actions."
+        }
+        # Publish to the channel FastAPI is listening to!
+        redis_client.publish("erp_notifications", json.dumps(alert_payload))
+        # ----------------------------------------
         
         logger.info(f"APS Engine Complete. Generated {len(recommendations)} PO actions.")
         return {"status": "success", "actions_taken": len(recommendations)}
